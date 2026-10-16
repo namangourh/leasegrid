@@ -1,0 +1,19 @@
+# Built binaries
+/leasegrid
+/leasegrid.exe
+*.exe
+*.test
+
+# Test and coverage output
+*.out
+coverage.*
+
+# Local Go workspace files (machine-specific, never committed)
+go.work
+go.work.sum
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
