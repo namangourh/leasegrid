@@ -46,6 +46,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// isolateUserConfig points os.UserConfigDir at an empty temporary directory,
+// so tests never read the developer's real LeaseGrid configuration.
+func isolateUserConfig(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)         // Windows
+	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
+	t.Setenv("HOME", dir)            // macOS, and the Linux fallback
+}
+
 // newTestDeps returns deps whose service uses ps, plus the buffers that
 // capture what run writes to stdout and stderr.
 func newTestDeps(ps ...providers.Provider) (deps, *bytes.Buffer, *bytes.Buffer) {
@@ -243,8 +253,13 @@ func TestBuildService(t *testing.T) {
 			wantListErr: app.ErrNoProviders,
 		},
 		{
-			name:    "unimplemented provider",
-			cfg:     config.Config{Providers: []string{"akash"}},
+			name:        "only disabled providers",
+			cfg:         config.Config{Providers: []config.ProviderConfig{{Name: "akash"}}},
+			wantListErr: app.ErrNoProviders,
+		},
+		{
+			name:    "enabled provider not implemented",
+			cfg:     config.Config{Providers: []config.ProviderConfig{{Name: "akash", Enabled: true}}},
 			wantErr: `provider "akash" is not implemented yet`,
 		},
 	}
@@ -268,16 +283,38 @@ func TestBuildService(t *testing.T) {
 	}
 }
 
-// TestLoadService checks the real wiring main uses: defaults give a service
-// with no providers.
+// TestLoadService checks the default-location wiring main uses.
 func TestLoadService(t *testing.T) {
-	svc, err := loadService()
-	if err != nil {
-		t.Fatalf("loadService() error = %v", err)
-	}
-	if _, err := svc.ListLeases(t.Context(), lease.Criteria{}); !errors.Is(err, app.ErrNoProviders) {
-		t.Errorf("ListLeases() error = %v, want %v", err, app.ErrNoProviders)
-	}
+	t.Run("no file at the default location", func(t *testing.T) {
+		isolateUserConfig(t)
+		svc, err := loadService()
+		if err != nil {
+			t.Fatalf("loadService() error = %v", err)
+		}
+		if _, err := svc.ListLeases(t.Context(), lease.Criteria{}); !errors.Is(err, app.ErrNoProviders) {
+			t.Errorf("ListLeases() error = %v, want %v", err, app.ErrNoProviders)
+		}
+	})
+
+	t.Run("file at the default location is used", func(t *testing.T) {
+		isolateUserConfig(t)
+		path, err := config.DefaultPath()
+		if err != nil {
+			t.Fatalf("DefaultPath() error = %v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("create config dir: %v", err)
+		}
+		content := "providers:\n  - name: akash\n    enabled: true\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+
+		_, err = loadService()
+		if err == nil || !strings.Contains(err.Error(), `provider "akash" is not implemented yet`) {
+			t.Fatalf("loadService() error = %v, want provider not implemented", err)
+		}
+	})
 }
 
 // TestBinarySmoke runs the built binary as a separate process, checking real

@@ -82,22 +82,27 @@ func exitCode(err error) int {
 	}
 }
 
-// loadService loads the configuration and builds the service from it.
+// loadService loads the configuration from its default location and builds
+// the service from it.
 func loadService() (*app.Service, error) {
-	cfg, err := config.Load()
+	path, err := config.DefaultPath()
 	if err != nil {
-		return nil, fmt.Errorf("load configuration: %w", err)
+		return nil, err
+	}
+	cfg, err := config.LoadOptional(path)
+	if err != nil {
+		return nil, err
 	}
 	return buildService(cfg)
 }
 
 // buildService turns configuration into an application service. It is the
 // only code that knows concrete provider implementations: the program's
-// composition root. No provider is implemented yet, so any configured
-// provider is an error; the Akash slice adds the first real one here.
+// composition root. No provider is implemented yet, so any enabled provider
+// is an error; the Akash slice adds the first real one here.
 func buildService(cfg config.Config) (*app.Service, error) {
-	if len(cfg.Providers) > 0 {
-		return nil, fmt.Errorf("provider %q is not implemented yet", cfg.Providers[0])
+	if names := cfg.EnabledProviders(); len(names) > 0 {
+		return nil, fmt.Errorf("provider %q is not implemented yet", names[0])
 	}
 	return app.New(), nil
 }
