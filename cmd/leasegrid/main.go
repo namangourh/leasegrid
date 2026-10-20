@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 
 	"github.com/namangourh/leasegrid/internal/app"
 	"github.com/namangourh/leasegrid/internal/config"
@@ -54,9 +55,11 @@ type deps struct {
 }
 
 func main() {
-	d := deps{stdout: os.Stdout, stderr: os.Stderr, newService: loadService}
+	// Ctrl+C cancels ctx, which makes in-flight provider calls return.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	err := run(ctx, os.Args[1:], deps{stdout: os.Stdout, stderr: os.Stderr, newService: loadService})
+	stop() // os.Exit skips deferred calls, so release the signal handler explicitly
 
-	err := run(context.Background(), os.Args[1:], d)
 	if err != nil && !errors.Is(err, errUsage) {
 		// Last-resort report: if stderr itself fails, nothing is left to do.
 		_, _ = fmt.Fprintf(os.Stderr, "leasegrid: %v\n", err)
@@ -71,6 +74,9 @@ func exitCode(err error) int {
 		return 0
 	case errors.Is(err, errUsage):
 		return 2
+	case errors.Is(err, context.Canceled):
+		// interrupted, e.g. by Ctrl+C: 128 + SIGINT (2), by convention
+		return 130
 	default:
 		return 1
 	}

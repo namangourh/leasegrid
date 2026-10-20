@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/namangourh/leasegrid/internal/lease"
 	"github.com/namangourh/leasegrid/internal/providers"
@@ -71,5 +72,31 @@ func TestProviderName(t *testing.T) {
 	p := &fake.Provider{ProviderName: "fake"}
 	if got := p.Name(); got != "fake" {
 		t.Errorf("Name() = %q, want %q", got, "fake")
+	}
+}
+
+func TestBlockingReturnsOnCancel(t *testing.T) {
+	p := fake.NewBlocking("slow")
+	if got := p.Name(); got != "slow" {
+		t.Errorf("Name() = %q, want %q", got, "slow")
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	errc := make(chan error, 1)
+	go func() {
+		_, err := p.List(ctx, lease.Criteria{})
+		errc <- err
+	}()
+
+	<-p.Started() // List is now blocked inside the provider
+	cancel()
+
+	select {
+	case err := <-errc:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("List() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("List did not return after cancel")
 	}
 }

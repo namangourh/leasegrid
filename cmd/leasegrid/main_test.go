@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/namangourh/leasegrid/internal/app"
 	"github.com/namangourh/leasegrid/internal/config"
@@ -215,6 +217,7 @@ func TestExitCode(t *testing.T) {
 		{name: "success", err: nil, want: 0},
 		{name: "usage error", err: fmt.Errorf("%w: bad flag", errUsage), want: 2},
 		{name: "other error", err: errors.New("provider unavailable"), want: 1},
+		{name: "interrupted", err: fmt.Errorf("provider slow: %w", context.Canceled), want: 130},
 	}
 
 	for _, tt := range tests {
@@ -311,5 +314,61 @@ func TestBinarySmoke(t *testing.T) {
 				t.Errorf("output does not contain %q:\n%s", tt.wantOut, out)
 			}
 		})
+	}
+}
+
+// TestListCancellation proves the ctx passed to run reaches the provider:
+// a provider that never answers on its own returns as soon as ctx ends.
+func TestListCancellation(t *testing.T) {
+	t.Run("cancel", func(t *testing.T) {
+		slow := fake.NewBlocking("slow")
+		d, stdout, _ := newTestDeps(slow)
+		ctx, cancel := context.WithCancel(t.Context())
+
+		errc := make(chan error, 1)
+		go func() { errc <- run(ctx, []string{"list"}, d) }()
+		<-slow.Started()
+		cancel()
+
+		err := waitErr(t, errc)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("run() error = %v, want context.Canceled", err)
+		}
+		if code := exitCode(err); code != 130 {
+			t.Errorf("exit code = %d, want 130", code)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout = %q, want empty", stdout.String())
+		}
+	})
+
+	t.Run("deadline", func(t *testing.T) {
+		d, _, _ := newTestDeps(fake.NewBlocking("slow"))
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+
+		errc := make(chan error, 1)
+		go func() { errc <- run(ctx, []string{"list"}, d) }()
+
+		err := waitErr(t, errc)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("run() error = %v, want context.DeadlineExceeded", err)
+		}
+		if code := exitCode(err); code != 1 {
+			t.Errorf("exit code = %d, want 1", code)
+		}
+	})
+}
+
+// waitErr returns the error sent on errc, or fails the test if none arrives
+// in time, which would mean cancellation never reached the provider.
+func waitErr(t *testing.T, errc <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-errc:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not return after its context ended")
+		return nil
 	}
 }

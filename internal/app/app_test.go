@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/namangourh/leasegrid/internal/app"
 	"github.com/namangourh/leasegrid/internal/lease"
@@ -104,5 +105,34 @@ func TestServiceErrorNamesProvider(t *testing.T) {
 	_, err := svc.ListLeases(t.Context(), lease.Criteria{})
 	if want := "provider flux: connection refused"; err == nil || err.Error() != want {
 		t.Fatalf("ListLeases() error = %v, want %q", err, want)
+	}
+}
+
+// TestServiceCancellationReachesProvider proves the service passes the
+// caller's ctx through to providers instead of making its own.
+func TestServiceCancellationReachesProvider(t *testing.T) {
+	slow := fake.NewBlocking("slow")
+	svc := app.New(slow)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	errc := make(chan error, 1)
+	go func() {
+		_, err := svc.ListLeases(ctx, lease.Criteria{})
+		errc <- err
+	}()
+
+	<-slow.Started()
+	cancel()
+
+	select {
+	case err := <-errc:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ListLeases() error = %v, want context.Canceled", err)
+		}
+		if want := "provider slow: context canceled"; err.Error() != want {
+			t.Errorf("ListLeases() error = %q, want %q", err, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListLeases did not return after cancel: ctx never reached the provider")
 	}
 }
