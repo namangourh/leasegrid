@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -56,6 +57,26 @@ func isolateUserConfig(t *testing.T) {
 	t.Setenv("HOME", dir)            // macOS, and the Linux fallback
 }
 
+// runBinary runs the built binary with an empty user config directory, so
+// results never depend on the developer's real configuration. It returns
+// the combined output and the exit code.
+func runBinary(t *testing.T, args ...string) (string, int) {
+	t.Helper()
+	dir := t.TempDir()
+	cmd := exec.Command(binPath, args...)
+	cmd.Env = append(os.Environ(), "APPDATA="+dir, "XDG_CONFIG_HOME="+dir, "HOME="+dir)
+
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	switch {
+	case errors.As(err, &exitErr):
+		return string(out), exitErr.ExitCode()
+	case err != nil:
+		t.Fatalf("start binary: %v", err)
+	}
+	return string(out), 0
+}
+
 // newTestDeps returns deps whose service uses ps, plus the buffers that
 // capture what run writes to stdout and stderr.
 func newTestDeps(ps ...providers.Provider) (deps, *bytes.Buffer, *bytes.Buffer) {
@@ -63,7 +84,7 @@ func newTestDeps(ps ...providers.Provider) (deps, *bytes.Buffer, *bytes.Buffer) 
 	d := deps{
 		stdout:     &stdout,
 		stderr:     &stderr,
-		newService: func() (*app.Service, error) { return app.New(ps...), nil },
+		newService: func(string) (*app.Service, error) { return app.New(ps...), nil },
 	}
 	return d, &stdout, &stderr
 }
@@ -287,7 +308,7 @@ func TestBuildService(t *testing.T) {
 func TestLoadService(t *testing.T) {
 	t.Run("no file at the default location", func(t *testing.T) {
 		isolateUserConfig(t)
-		svc, err := loadService()
+		svc, err := loadService("")
 		if err != nil {
 			t.Fatalf("loadService() error = %v", err)
 		}
@@ -310,9 +331,29 @@ func TestLoadService(t *testing.T) {
 			t.Fatalf("write config: %v", err)
 		}
 
-		_, err = loadService()
+		_, err = loadService("")
 		if err == nil || !strings.Contains(err.Error(), `provider "akash" is not implemented yet`) {
 			t.Fatalf("loadService() error = %v, want provider not implemented", err)
+		}
+	})
+
+	t.Run("explicit path is used", func(t *testing.T) {
+		isolateUserConfig(t)
+		path := filepath.Join(t.TempDir(), "custom.yaml")
+		if err := os.WriteFile(path, []byte("providers:\n  - name: flux\n    enabled: true\n"), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		_, err := loadService(path)
+		if err == nil || !strings.Contains(err.Error(), `provider "flux" is not implemented yet`) {
+			t.Fatalf("loadService() error = %v, want provider not implemented", err)
+		}
+	})
+
+	t.Run("explicit path must exist", func(t *testing.T) {
+		isolateUserConfig(t)
+		_, err := loadService(filepath.Join(t.TempDir(), "missing.yaml"))
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("loadService() error = %v, want fs.ErrNotExist", err)
 		}
 	})
 }
@@ -334,22 +375,14 @@ func TestBinarySmoke(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := exec.Command(binPath, tt.args...).CombinedOutput()
-
-			code := 0
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
-				code = exitErr.ExitCode()
-			} else if err != nil {
-				t.Fatalf("start binary: %v", err)
-			}
-
+			out, code := runBinary(t, tt.args...)
 			if code != tt.wantCode {
 				t.Errorf("exit code = %d, want %d\noutput: %s", code, tt.wantCode, out)
 			}
-			if !strings.Contains(string(out), tt.wantOut) {
+			if !strings.Contains(out, tt.wantOut) {
 				t.Errorf("output does not contain %q:\n%s", tt.wantOut, out)
 			}
+
 		})
 	}
 }
@@ -407,5 +440,161 @@ func waitErr(t *testing.T, errc <-chan error) error {
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not return after its context ended")
 		return nil
+	}
+}
+
+// TestConfigFlag drives the CLI with real config loading (only the user
+// config directory is redirected) to check that --config is parsed, the
+// file is loaded, and errors reach the process boundary.
+func TestConfigFlag(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string   // written to a temporary config file
+		noFile     bool     // use a path that doesn't exist instead
+		args       []string // "CONFIG" is replaced with the config file's path
+		wantErr    error    // matched with errors.Is when set
+		wantCode   int
+		wantMsg    string // must appear in stderr or the returned error
+		wantStdout string
+	}{
+		{
+			name:     "enabled provider is not implemented yet",
+			content:  "providers:\n  - name: akash\n    enabled: true\n",
+			args:     []string{"--config", "CONFIG", "list"},
+			wantCode: 1,
+			wantMsg:  `provider "akash" is not implemented yet`,
+		},
+		{
+			name:     "only disabled providers",
+			content:  "providers:\n  - name: akash\n",
+			args:     []string{"--config", "CONFIG", "list"},
+			wantErr:  app.ErrNoProviders,
+			wantCode: 1,
+			wantMsg:  "no providers configured",
+		},
+		{
+			name:     "empty file",
+			content:  "",
+			args:     []string{"--config", "CONFIG", "list"},
+			wantErr:  app.ErrNoProviders,
+			wantCode: 1,
+		},
+		{
+			name:     "malformed file",
+			content:  "providers: [\n",
+			args:     []string{"--config", "CONFIG", "list"},
+			wantErr:  config.ErrInvalid,
+			wantCode: 1,
+			wantMsg:  "invalid configuration",
+		},
+		{
+			name:     "unknown field",
+			content:  "providers:\n  - name: akash\n    enabeld: true\n",
+			args:     []string{"--config", "CONFIG", "list"},
+			wantErr:  config.ErrInvalid,
+			wantCode: 1,
+			wantMsg:  "field enabeld not found",
+		},
+		{
+			name:     "missing explicit file",
+			noFile:   true,
+			args:     []string{"--config", "CONFIG", "list"},
+			wantErr:  fs.ErrNotExist,
+			wantCode: 1,
+			wantMsg:  "read config",
+		},
+		{
+			name:       "version does not load config",
+			noFile:     true,
+			args:       []string{"--config", "CONFIG", "--version"},
+			wantCode:   0,
+			wantStdout: "leasegrid 0.1.0\n",
+		},
+		{
+			name:     "config flag after the command is rejected",
+			content:  "providers:\n",
+			args:     []string{"list", "--config", "CONFIG"},
+			wantErr:  errUsage,
+			wantCode: 2,
+			wantMsg:  "flag provided but not defined: -config",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateUserConfig(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if !tt.noFile {
+				if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+					t.Fatalf("write config: %v", err)
+				}
+			}
+			args := slices.Clone(tt.args)
+			for i, a := range args {
+				if a == "CONFIG" {
+					args[i] = path
+				}
+			}
+
+			var stdout, stderr bytes.Buffer
+			err := run(t.Context(), args, deps{stdout: &stdout, stderr: &stderr, newService: loadService})
+
+			if code := exitCode(err); code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d (error: %v)\nstderr: %s", code, tt.wantCode, err, stderr.String())
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("run() error = %v, want it to match %v", err, tt.wantErr)
+			}
+			seen := stderr.String()
+			if err != nil {
+				seen += err.Error()
+			}
+			if !strings.Contains(seen, tt.wantMsg) {
+				t.Errorf("message %q not found in stderr or error:\n%s", tt.wantMsg, seen)
+			}
+			if got := stdout.String(); got != tt.wantStdout {
+				t.Errorf("stdout = %q, want %q", got, tt.wantStdout)
+			}
+		})
+	}
+}
+
+// TestBinaryConfig runs the real binary with --config, proving the flag,
+// file loading and exit codes work end to end in a separate process.
+func TestBinaryConfig(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return path
+	}
+	valid := write("valid.yaml", "providers:\n  - name: akash\n    enabled: true\n")
+	malformed := write("malformed.yaml", "providers: [\n")
+	missing := filepath.Join(dir, "missing.yaml")
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantCode int
+		wantOut  string
+	}{
+		{name: "valid file", args: []string{"--config", valid, "list"}, wantCode: 1, wantOut: `leasegrid: provider "akash" is not implemented yet`},
+		{name: "malformed file", args: []string{"--config", malformed, "list"}, wantCode: 1, wantOut: "invalid configuration"},
+		{name: "missing file", args: []string{"--config", missing, "list"}, wantCode: 1, wantOut: "leasegrid: read config"},
+		{name: "version ignores config", args: []string{"--config", missing, "--version"}, wantCode: 0, wantOut: "leasegrid 0.1.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, code := runBinary(t, tt.args...)
+			if code != tt.wantCode {
+				t.Errorf("exit code = %d, want %d\noutput: %s", code, tt.wantCode, out)
+			}
+			if !strings.Contains(out, tt.wantOut) {
+				t.Errorf("output does not contain %q:\n%s", tt.wantOut, out)
+			}
+		})
 	}
 }

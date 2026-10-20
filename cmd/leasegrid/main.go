@@ -26,6 +26,9 @@ const usage = `LeaseGrid manages compute leases across DePIN providers.
 Usage:
   leasegrid [flags] <command> [command flags]
 
+Flags go before the command, for example:
+  leasegrid --config my-config.yaml list
+
 Commands:
   list    List leases from the configured providers
 
@@ -51,7 +54,7 @@ var errUsage = errors.New("invalid usage")
 type deps struct {
 	stdout     io.Writer
 	stderr     io.Writer
-	newService func() (*app.Service, error) // called only by commands that need providers
+	newService func(configPath string) (*app.Service, error) // called only by commands that need providers; "" means the default location
 }
 
 func main() {
@@ -82,18 +85,26 @@ func exitCode(err error) int {
 	}
 }
 
-// loadService loads the configuration from its default location and builds
-// the service from it.
-func loadService() (*app.Service, error) {
-	path, err := config.DefaultPath()
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := config.LoadOptional(path)
+// loadService loads the configuration and builds the service from it.
+func loadService(configPath string) (*app.Service, error) {
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return nil, err
 	}
 	return buildService(cfg)
+}
+
+// loadConfig applies the file-location rules: an explicit path must exist,
+// while a file at the default location may be missing.
+func loadConfig(configPath string) (config.Config, error) {
+	if configPath != "" {
+		return config.Load(configPath)
+	}
+	path, err := config.DefaultPath()
+	if err != nil {
+		return config.Config{}, err
+	}
+	return config.LoadOptional(path)
 }
 
 // buildService turns configuration into an application service. It is the
@@ -113,6 +124,7 @@ func run(ctx context.Context, args []string, d deps) error {
 	fs := flag.NewFlagSet("leasegrid", flag.ContinueOnError)
 	fs.SetOutput(d.stderr)
 	showVersion := fs.Bool("version", false, "print the LeaseGrid version")
+	configPath := fs.String("config", "", "path to the config file (default: leasegrid/config.yaml in your user config directory)")
 	fs.Usage = func() {
 		// Nothing useful can be done if writing help text fails.
 		_, _ = fmt.Fprint(fs.Output(), usage)
@@ -139,7 +151,7 @@ func run(ctx context.Context, args []string, d deps) error {
 
 	switch cmd, rest := fs.Arg(0), fs.Args()[1:]; cmd {
 	case "list":
-		return runList(ctx, rest, d)
+		return runList(ctx, rest, *configPath, d)
 	default:
 		_, _ = fmt.Fprintf(d.stderr, "unknown command %q\n\n", cmd)
 		fs.Usage()
@@ -148,8 +160,9 @@ func run(ctx context.Context, args []string, d deps) error {
 }
 
 // runList implements "leasegrid list": it parses list's flags, asks the
-// application service for leases, and writes them in the chosen format.
-func runList(ctx context.Context, args []string, d deps) error {
+// application service (built from the config at configPath) for leases, and
+// writes them in the chosen format.
+func runList(ctx context.Context, args []string, configPath string, d deps) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(d.stderr)
 
@@ -177,7 +190,8 @@ func runList(ctx context.Context, args []string, d deps) error {
 		return fmt.Errorf("%w: %w", errUsage, err)
 	}
 
-	svc, err := d.newService()
+	svc, err := d.newService(configPath)
+
 	if err != nil {
 		return err
 	}
