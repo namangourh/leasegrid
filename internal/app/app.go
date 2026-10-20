@@ -38,7 +38,7 @@ func New(ps ...providers.Provider) *Service {
 // they are correct even if a provider ignored part of the criteria.
 //
 // Providers are queried one after another and the first error stops the
-// call. Concurrent queries and partial results (D-014) come with the
+// call. Concurrent queries and partial results come with the
 // second real provider.
 func (s *Service) ListLeases(ctx context.Context, criteria lease.Criteria) ([]lease.Lease, error) {
 	if len(s.providers) == 0 {

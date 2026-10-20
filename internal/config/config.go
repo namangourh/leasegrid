@@ -1,7 +1,7 @@
 // Package config loads LeaseGrid's configuration.
 //
 // Load currently returns built-in defaults and reads no file. The file
-// format and library are chosen in the config slice (D-030).
+// format and library are chosen in the config slice.
 package config
 
 // Config is LeaseGrid's configuration.
