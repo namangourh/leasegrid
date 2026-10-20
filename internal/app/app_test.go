@@ -13,23 +13,22 @@ import (
 	"github.com/namangourh/leasegrid/internal/providers/fake"
 )
 
-// unfiltered ignores criteria and returns everything, as a real provider may
-// when its API can't filter. Defining it here shows that any type with the
-// right methods can be injected, even one that exists only in a test.
-type unfiltered struct{ leases []lease.Lease }
+// inline is a provider defined right here in the test. It satisfies
+// app.Provider just by having the right methods: Go needs no "implements".
+type inline struct{ leases []lease.Lease }
 
-func (u unfiltered) Name() string { return "unfiltered" }
+func (i inline) Name() string { return "inline" }
 
-func (u unfiltered) List(context.Context, lease.Criteria) ([]lease.Lease, error) {
-	return u.leases, nil
+func (i inline) ListLeases(context.Context) ([]lease.Lease, error) {
+	return i.leases, nil
 }
 
 func TestServiceListLeases(t *testing.T) {
 	web := lease.Lease{ID: "a1", Provider: "akash", Name: "web", Status: lease.StatusActive}
 	db := lease.Lease{ID: "a2", Provider: "akash", Name: "db", Status: lease.StatusClosed}
 	api := lease.Lease{ID: "f1", Provider: "flux", Name: "api", Status: lease.StatusActive}
-	u1 := lease.Lease{ID: "u1", Provider: "unfiltered", Name: "job", Status: lease.StatusActive}
-	u2 := lease.Lease{ID: "u2", Provider: "unfiltered", Name: "old", Status: lease.StatusClosed}
+	job := lease.Lease{ID: "i1", Provider: "inline", Name: "job", Status: lease.StatusActive}
+	old := lease.Lease{ID: "i2", Provider: "inline", Name: "old", Status: lease.StatusClosed}
 	errDown := errors.New("connection refused")
 
 	akash := &fake.Provider{ProviderName: "akash", Leases: []lease.Lease{web, db}}
@@ -38,33 +37,33 @@ func TestServiceListLeases(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		providers []providers.Provider
+		providers []app.Provider
 		criteria  lease.Criteria
 		want      []lease.Lease
 		wantErr   error
 	}{
 		{
 			name:      "injected fake provider",
-			providers: []providers.Provider{akash},
+			providers: []app.Provider{akash},
 			want:      []lease.Lease{web, db},
 		},
 		{
 			name:      "merges providers in order",
-			providers: []providers.Provider{akash, flux},
+			providers: []app.Provider{akash, flux},
 			want:      []lease.Lease{web, db, api},
 		},
 		{
 			// fluxDown would fail the call if it were queried.
 			name:      "queries only the selected provider",
-			providers: []providers.Provider{akash, fluxDown},
+			providers: []app.Provider{akash, fluxDown},
 			criteria:  lease.Criteria{Provider: "akash"},
 			want:      []lease.Lease{web, db},
 		},
 		{
-			name:      "filters results a provider did not filter",
-			providers: []providers.Provider{unfiltered{leases: []lease.Lease{u1, u2}}},
+			name:      "applies status criteria",
+			providers: []app.Provider{inline{leases: []lease.Lease{job, old}}},
 			criteria:  lease.Criteria{Status: lease.StatusActive},
-			want:      []lease.Lease{u1},
+			want:      []lease.Lease{job},
 		},
 		{
 			name:    "no providers",
@@ -72,14 +71,30 @@ func TestServiceListLeases(t *testing.T) {
 		},
 		{
 			name:      "unknown provider",
-			providers: []providers.Provider{akash},
+			providers: []app.Provider{akash},
 			criteria:  lease.Criteria{Provider: "render"},
 			wantErr:   app.ErrUnknownProvider,
 		},
 		{
 			name:      "provider error is returned",
-			providers: []providers.Provider{akash, fluxDown},
+			providers: []app.Provider{akash, fluxDown},
 			wantErr:   errDown,
+		},
+		{
+			name: "invalid lease is a bad response",
+			providers: []app.Provider{&fake.Provider{
+				ProviderName: "akash",
+				Leases:       []lease.Lease{{Provider: "akash", Status: lease.StatusActive}}, // no ID
+			}},
+			wantErr: providers.ErrBadResponse,
+		},
+		{
+			name: "lease from the wrong provider is a bad response",
+			providers: []app.Provider{&fake.Provider{
+				ProviderName: "akash",
+				Leases:       []lease.Lease{api}, // api says Provider "flux"
+			}},
+			wantErr: providers.ErrBadResponse,
 		},
 	}
 
@@ -98,13 +113,34 @@ func TestServiceListLeases(t *testing.T) {
 	}
 }
 
-// TestServiceErrorNamesProvider checks the message a user will eventually see.
-func TestServiceErrorNamesProvider(t *testing.T) {
-	svc := app.New(&fake.Provider{ProviderName: "flux", Err: errors.New("connection refused")})
+// TestServiceErrorMessages checks the messages a user will eventually see.
+func TestServiceErrorMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider app.Provider
+		want     string
+	}{
+		{
+			name:     "provider error names the provider",
+			provider: &fake.Provider{ProviderName: "flux", Err: errors.New("connection refused")},
+			want:     "provider flux: connection refused",
+		},
+		{
+			name: "invalid lease explains the problem",
+			provider: &fake.Provider{ProviderName: "akash", Leases: []lease.Lease{
+				{ID: "x", Provider: "akash", Status: "pending"},
+			}},
+			want: `provider akash: bad response: validate lease "x": unsupported status "pending"`,
+		},
+	}
 
-	_, err := svc.ListLeases(t.Context(), lease.Criteria{})
-	if want := "provider flux: connection refused"; err == nil || err.Error() != want {
-		t.Fatalf("ListLeases() error = %v, want %q", err, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := app.New(tt.provider).ListLeases(t.Context(), lease.Criteria{})
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("ListLeases() error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 

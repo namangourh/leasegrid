@@ -20,7 +20,6 @@ import (
 	"github.com/namangourh/leasegrid/internal/app"
 	"github.com/namangourh/leasegrid/internal/config"
 	"github.com/namangourh/leasegrid/internal/lease"
-	"github.com/namangourh/leasegrid/internal/providers"
 	"github.com/namangourh/leasegrid/internal/providers/fake"
 )
 
@@ -79,7 +78,7 @@ func runBinary(t *testing.T, args ...string) (string, int) {
 
 // newTestDeps returns deps whose service uses ps, plus the buffers that
 // capture what run writes to stdout and stderr.
-func newTestDeps(ps ...providers.Provider) (deps, *bytes.Buffer, *bytes.Buffer) {
+func newTestDeps(ps ...app.Provider) (deps, *bytes.Buffer, *bytes.Buffer) {
 	var stdout, stderr bytes.Buffer
 	d := deps{
 		stdout:     &stdout,
@@ -174,7 +173,7 @@ func TestListErrors(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		providers []providers.Provider
+		providers []app.Provider
 		args      []string
 		wantErr   error
 		wantCode  int
@@ -182,7 +181,7 @@ func TestListErrors(t *testing.T) {
 	}{
 		{
 			name:      "unknown format",
-			providers: []providers.Provider{akash},
+			providers: []app.Provider{akash},
 			args:      []string{"list", "--format", "yaml"},
 			wantErr:   errUsage,
 			wantCode:  2,
@@ -190,7 +189,7 @@ func TestListErrors(t *testing.T) {
 		},
 		{
 			name:      "provider error",
-			providers: []providers.Provider{fluxDown},
+			providers: []app.Provider{fluxDown},
 			args:      []string{"list"},
 			wantErr:   fluxDown.Err,
 			wantCode:  1,
@@ -205,7 +204,7 @@ func TestListErrors(t *testing.T) {
 		},
 		{
 			name:      "unknown provider",
-			providers: []providers.Provider{akash},
+			providers: []app.Provider{akash},
 			args:      []string{"list", "--provider", "render"},
 			wantErr:   app.ErrUnknownProvider,
 			wantCode:  1,
