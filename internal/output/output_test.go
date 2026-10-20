@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/namangourh/leasegrid/internal/lease"
 	"github.com/namangourh/leasegrid/internal/output"
@@ -119,5 +120,44 @@ func TestWriteUnknownFormat(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Errorf("Write() wrote %q for an unknown format, want nothing", buf.String())
+	}
+}
+
+func TestWriteJSONFullLease(t *testing.T) {
+	leases := []lease.Lease{{
+		ID:        "1001/1/1",
+		Provider:  "akash",
+		Name:      "web",
+		Status:    lease.StatusActive,
+		Expires:   time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC),
+		Cost:      lease.Cost{PerHour: 3000, Denom: "uakt"},
+		Resources: lease.Resources{CPUMillis: 500, MemoryBytes: 536870912, StorageBytes: 1073741824},
+	}}
+	want := `[
+  {
+    "id": "1001/1/1",
+    "provider": "akash",
+    "name": "web",
+    "status": "active",
+    "expires": "2026-11-14T12:00:00Z",
+    "cost": {
+      "per_hour": 3000,
+      "denom": "uakt"
+    },
+    "resources": {
+      "cpu_millis": 500,
+      "memory_bytes": 536870912,
+      "storage_bytes": 1073741824,
+      "gpus": 0
+    }
+  }
+]
+`
+	var buf bytes.Buffer
+	if err := output.Write(&buf, output.FormatJSON, leases); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if got := buf.String(); got != want {
+		t.Errorf("Write() output =\n%s\nwant\n%s", got, want)
 	}
 }

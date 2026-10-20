@@ -1,8 +1,12 @@
 package lease
 
 import (
+	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestFilter(t *testing.T) {
@@ -33,6 +37,78 @@ func TestFilter(t *testing.T) {
 			}
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("Filter() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidate(t *testing.T) {
+	valid := Lease{
+		ID:       "1001/1/1",
+		Provider: "akash",
+		Status:   StatusActive,
+		Cost:     Cost{PerHour: 3000, Denom: "uakt"},
+	}
+
+	tests := []struct {
+		name    string
+		modify  func(l *Lease) // changes a copy of valid
+		wantErr error          // nil means the lease is valid
+	}{
+		{name: "valid active lease", modify: func(*Lease) {}},
+		{name: "valid closed lease", modify: func(l *Lease) { l.Status = StatusClosed }},
+		{name: "valid insufficient-funds lease", modify: func(l *Lease) { l.Status = StatusInsufficientFunds }},
+		{name: "zero cost is valid", modify: func(l *Lease) { l.Cost = Cost{} }},
+		{name: "empty ID", modify: func(l *Lease) { l.ID = "" }, wantErr: ErrMissingID},
+		{name: "missing provider name", modify: func(l *Lease) { l.Provider = "" }, wantErr: ErrMissingProvider},
+		{name: "empty status", modify: func(l *Lease) { l.Status = "" }, wantErr: ErrUnknownStatus},
+		{name: "unsupported status", modify: func(l *Lease) { l.Status = "expiring" }, wantErr: ErrUnknownStatus},
+		{name: "negative cost", modify: func(l *Lease) { l.Cost.PerHour = -1 }, wantErr: ErrNegativeCost},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := valid // a copy: assigning a struct copies its fields
+			tt.modify(&l)
+
+			err := l.Validate()
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Validate() error = %v, want %v", err, tt.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), fmt.Sprintf("validate lease %q", l.ID)) {
+				t.Errorf("Validate() error = %q, want it to name the lease", err)
+			}
+		})
+	}
+}
+
+func TestValidateMessage(t *testing.T) {
+	l := Lease{ID: "x", Provider: "akash", Status: "pending"}
+	want := `validate lease "x": unsupported status "pending"`
+	if err := l.Validate(); err == nil || err.Error() != want {
+		t.Fatalf("Validate() error = %v, want %q", err, want)
+	}
+}
+
+func TestExpiresWithin(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		expires time.Time
+		want    bool
+	}{
+		{name: "unknown expiry", expires: time.Time{}, want: false},
+		{name: "inside the window", expires: now.Add(time.Hour), want: true},
+		{name: "after the window", expires: now.Add(48 * time.Hour), want: false},
+		{name: "already expired", expires: now.Add(-time.Hour), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := Lease{Expires: tt.expires}
+			if got := l.ExpiresWithin(now, 24*time.Hour); got != tt.want {
+				t.Errorf("ExpiresWithin() = %v, want %v", got, tt.want)
 			}
 		})
 	}
