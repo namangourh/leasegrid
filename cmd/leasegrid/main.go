@@ -2,8 +2,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -19,22 +22,54 @@ Usage:
 
 `
 
+// errUsage marks errors caused by invalid command-line input. The flag
+// package has already printed the details, so main only sets the exit code.
+var errUsage = errors.New("invalid usage")
+
 func main() {
-	fs := flag.NewFlagSet("leasegrid", flag.ExitOnError)
+	err := run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)
+	if err != nil && !errors.Is(err, errUsage) {
+		// Last-resort report: if stderr itself fails, nothing is left to do.
+		_, _ = fmt.Fprintf(os.Stderr, "leasegrid: %v\n", err)
+	}
+	os.Exit(exitCode(err))
+}
+
+// exitCode maps an error returned by run to a process exit status.
+func exitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, errUsage):
+		return 2
+	default:
+		return 1
+	}
+}
+
+// run executes the CLI. It never calls os.Exit, so tests can call it
+// directly with their own arguments and output buffers.
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("leasegrid", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print the LeaseGrid version")
 
 	fs.Usage = func() {
+		// Nothing useful can be done if writing help text fails.
 		_, _ = fmt.Fprint(fs.Output(), usage)
 		fs.PrintDefaults()
 	}
 
-	// With ExitOnError, Parse exits the program itself on a bad flag or -h,
-	// so the error it returns is always nil here. Discarding it explicitly
-	// keeps the errcheck linter happy.
-	_ = fs.Parse(os.Args[1:])
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil // -h or --help: usage was printed, which is success.
+		}
+		return fmt.Errorf("%w: %w", errUsage, err)
+	}
 
 	if *showVersion {
-		fmt.Printf("leasegrid %s\n", version)
-		return
+		_, err := fmt.Fprintf(stdout, "leasegrid %s\n", version)
+		return err
 	}
+	return nil
 }
