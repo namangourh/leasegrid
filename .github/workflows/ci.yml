@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
+          cache-dependency-path: go.sum
 
       - name: Check go.mod is tidy
         run: go mod tidy -diff
