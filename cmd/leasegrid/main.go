@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/namangourh/leasegrid/internal/app"
+	"github.com/namangourh/leasegrid/internal/config"
 	"github.com/namangourh/leasegrid/internal/lease"
 	"github.com/namangourh/leasegrid/internal/output"
 )
@@ -53,12 +54,8 @@ type deps struct {
 }
 
 func main() {
-	d := deps{
-		stdout: os.Stdout,
-		stderr: os.Stderr,
-		// No providers yet. Config loading replaces this in step 8 (D-030).
-		newService: func() (*app.Service, error) { return app.New(), nil },
-	}
+	d := deps{stdout: os.Stdout, stderr: os.Stderr, newService: loadService}
+
 	err := run(context.Background(), os.Args[1:], d)
 	if err != nil && !errors.Is(err, errUsage) {
 		// Last-resort report: if stderr itself fails, nothing is left to do.
@@ -77,6 +74,26 @@ func exitCode(err error) int {
 	default:
 		return 1
 	}
+}
+
+// loadService loads the configuration and builds the service from it.
+func loadService() (*app.Service, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load configuration: %w", err)
+	}
+	return buildService(cfg)
+}
+
+// buildService turns configuration into an application service. It is the
+// only code that knows concrete provider implementations: the program's
+// composition root. No provider is implemented yet, so any configured
+// provider is an error; the Akash slice adds the first real one here.
+func buildService(cfg config.Config) (*app.Service, error) {
+	if len(cfg.Providers) > 0 {
+		return nil, fmt.Errorf("provider %q is not implemented yet", cfg.Providers[0])
+	}
+	return app.New(), nil
 }
 
 // run executes the CLI. It never calls os.Exit, so tests can call it

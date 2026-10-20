@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/namangourh/leasegrid/internal/app"
+	"github.com/namangourh/leasegrid/internal/config"
 	"github.com/namangourh/leasegrid/internal/lease"
 	"github.com/namangourh/leasegrid/internal/providers"
 	"github.com/namangourh/leasegrid/internal/providers/fake"
@@ -222,6 +223,57 @@ func TestExitCode(t *testing.T) {
 				t.Errorf("exitCode(%v) = %d, want %d", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestBuildService checks that configuration turns into the right service.
+func TestBuildService(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         config.Config
+		wantErr     string // substring of buildService's error; empty means success
+		wantListErr error  // expected error from ListLeases on the built service
+	}{
+		{
+			name:        "no providers configured",
+			cfg:         config.Config{},
+			wantListErr: app.ErrNoProviders,
+		},
+		{
+			name:    "unimplemented provider",
+			cfg:     config.Config{Providers: []string{"akash"}},
+			wantErr: `provider "akash" is not implemented yet`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, err := buildService(tt.cfg)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("buildService() error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildService() error = %v", err)
+			}
+			if _, err := svc.ListLeases(t.Context(), lease.Criteria{}); !errors.Is(err, tt.wantListErr) {
+				t.Errorf("ListLeases() error = %v, want %v", err, tt.wantListErr)
+			}
+		})
+	}
+}
+
+// TestLoadService checks the real wiring main uses: defaults give a service
+// with no providers.
+func TestLoadService(t *testing.T) {
+	svc, err := loadService()
+	if err != nil {
+		t.Fatalf("loadService() error = %v", err)
+	}
+	if _, err := svc.ListLeases(t.Context(), lease.Criteria{}); !errors.Is(err, app.ErrNoProviders) {
+		t.Errorf("ListLeases() error = %v, want %v", err, app.ErrNoProviders)
 	}
 }
 
