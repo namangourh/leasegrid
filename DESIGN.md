@@ -7,14 +7,16 @@ One CLI for viewing compute leases across DePIN providers, starting with Akash.
 ## Current State
 
 - `leasegrid --help`, `leasegrid --version`
-- `leasegrid list [--format json] [--provider NAME]`
-- Standard library only: no third-party dependencies
+- `leasegrid [--config PATH] list [--format json] [--provider NAME]`
+- YAML configuration file: loaded, strictly parsed and validated
+- One third-party dependency: `go.yaml.in/yaml/v3`, for parsing the config file
 - In-memory fake providers for tests; no real provider yet
 
 ## Next Slice
 
 - Akash provider: read-only queries by owner wallet address
-- Configuration file naming the enabled providers
+- Provider-specific settings in the config file, such as the Akash endpoint and
+  owner address
 
 ## Non-Goals for Now
 
@@ -30,9 +32,9 @@ One CLI for viewing compute leases across DePIN providers, starting with Akash.
 
 | Package | Responsibility |
 |---|---|
-| `cmd/leasegrid` | Entry point: parses arguments, builds the service from config, prints output, maps errors to exit codes |
+| `cmd/leasegrid` | Entry point: parses arguments, picks the config file, builds the service, prints output, maps errors to exit codes |
 | `internal/app` | Use cases: selects providers, calls them, merges and filters results, labels errors |
-| `internal/config` | Loads configuration (built-in defaults for now) |
+| `internal/config` | Reads, strictly parses and validates the YAML config file; knows nothing about flags, providers or exit codes |
 | `internal/providers` | The `Provider` interface |
 | `internal/providers/fake` | Deterministic in-memory providers for tests |
 | `internal/lease` | Lease model and pure helpers (`Filter`) |
@@ -59,6 +61,28 @@ Providers may ignore criteria they can't apply on the server side; `internal/app
 always filters the results again. Methods such as `GetLease` are added when a
 command needs them.
 
+## Configuration
+
+```yaml
+providers:
+  - name: akash
+    enabled: true
+```
+
+- **Location:** `--config PATH`, which must exist; otherwise `leasegrid/config.yaml`
+  in `os.UserConfigDir()`, which may be missing (giving built-in defaults).
+- **Lazy loading:** only commands that need providers read the file, so
+  `--version` and `--help` work even with a broken config.
+- **Strict parsing:** unknown fields are rejected. An empty file is valid.
+- **Validation:** provider names are required and unique, and all problems are
+  reported together.
+- **Errors callers can classify:**
+  - a missing file matches `fs.ErrNotExist`
+  - anything wrong with the contents matches `config.ErrInvalid`
+  - validation details are available as `*config.ValidationError`
+
+  The CLI maps every config error to exit status 1.
+
 ## Key Design Choices
 
 - **Thin `main`.** All logic lives in `run`, which returns errors instead of
@@ -74,3 +98,7 @@ command needs them.
   (1 AKT = 1,000,000 uakt), never floating point.
 - **Partial results (planned).** With several providers, one failing provider
   should not hide the others' leases.
+- **Strict configuration.** Unknown config fields are rejected, so typos are
+  reported. Relaxing that later is non-breaking; tightening it would break
+  existing files.
+

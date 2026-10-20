@@ -17,9 +17,13 @@ Early development. **No provider is implemented yet. Akash integration is next.*
 What works today:
 
 - `leasegrid --help` and `leasegrid --version`
+- A YAML configuration file (see [Configuration](#configuration)): loaded, strictly
+  parsed and validated
 - `leasegrid list`, fully wired from configuration through providers to JSON output,
-  and tested against in-memory fake providers. With no real provider available, it
-  reports `no providers configured` and exits with status 1.
+  and tested against in-memory fake providers. With no provider enabled, it reports
+  `no providers configured`; enabling a provider reports that it is not implemented
+  yet. Both exit with status 1.
+
 
 ## Install
 
@@ -43,7 +47,11 @@ leasegrid --help
 leasegrid list --help
 leasegrid list --format json
 leasegrid list --provider akash
+leasegrid --config ./my-config.yaml list
 ```
+
+Global flags such as `--config` go before the command.
+
 
 Today, `leasegrid list` prints:
 
@@ -56,11 +64,41 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Error, such as no providers configured or a provider failure |
+| 1 | Error, such as a missing or invalid config file, no providers configured, or a provider failure |
 | 2 | Invalid usage: unknown flag, command or output format |
 | 130 | Interrupted with Ctrl+C |
 
+## Configuration
+
+LeaseGrid reads a YAML file:
+
+```yaml
+providers:
+  - name: akash
+    enabled: true
+  - name: flux        # listed but disabled: enabled defaults to false
+```
+
+Where it looks:
+
+| How | File | If the file is missing |
+|---|---|---|
+| `leasegrid --config PATH <command>` | `PATH` | Error, exit status 1 |
+| No `--config` flag | `leasegrid/config.yaml` in your user config directory: `%AppData%` on Windows, `~/.config` on Linux, `~/Library/Application Support` on macOS | Built-in defaults: no providers |
+
+Rules:
+
+- An empty file is valid and enables nothing.
+- Each provider needs a unique `name`.
+- Unknown fields are rejected, so a typo such as `enabeld` is reported instead of being silently ignored.
+- All validation problems are reported at once.
+- The file never holds credentials.
+
+No provider is implemented yet, so enabling one currently reports
+`provider "akash" is not implemented yet`.
+
 ## Development
+
 
 ```sh
 gofmt -l .           # must print nothing
@@ -76,8 +114,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 1. ✅ CLI foundation
 2. ✅ Lease model, provider interface, fake providers, and the `list` command
-3. Akash provider integration
-4. Configuration file
+3. ✅ Configuration file
+4. Akash provider integration
 5. Table output
 
 See [DESIGN.md](DESIGN.md) for the technical design.
