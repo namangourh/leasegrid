@@ -4,9 +4,22 @@
 
 LeaseGrid is a Go CLI for viewing compute leases across DePIN providers.
 
+## Why
+
+People who deploy on decentralized compute networks such as Akash and Flux need a
+different tool for each network. Nothing gives them one view of all their active
+leases, what they cost, or when they run out. LeaseGrid aims to be that single view.
+
 ## Status
 
-Early development. The current release proves the CLI foundation only.
+Early development. **No provider is implemented yet. Akash integration is next.**
+
+What works today:
+
+- `leasegrid --help` and `leasegrid --version`
+- `leasegrid list`, fully wired from configuration through providers to JSON output,
+  and tested against in-memory fake providers. With no real provider available, it
+  reports `no providers configured` and exits with status 1.
 
 ## Install
 
@@ -17,35 +30,58 @@ go install github.com/namangourh/leasegrid/cmd/leasegrid@latest
 leasegrid --version
 ```
 
-## Run
+Or build from a clone:
 
 ```sh
-go run ./cmd/leasegrid --help
-go run ./cmd/leasegrid --version
+go build -o leasegrid ./cmd/leasegrid
 ```
 
-Expected version output:
+## Usage
+
+```sh
+leasegrid --help
+leasegrid list --help
+leasegrid list --format json
+leasegrid list --provider akash
+```
+
+Today, `leasegrid list` prints:
 
 ```text
-leasegrid 0.1.0
+leasegrid: no providers configured
 ```
 
-## Test and build
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Error, such as no providers configured or a provider failure |
+| 2 | Invalid usage: unknown flag, command or output format |
+| 130 | Interrupted with Ctrl+C |
+
+## Development
 
 ```sh
+gofmt -l .           # must print nothing
+go vet ./...
 go test ./...
-go build ./...
+go test -race ./...  # needs cgo; on Windows, a C compiler such as gcc
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Roadmap
 
-1. CLI foundation
-2. Normalized lease model and provider interface
-3. Mock provider implementation
-4. Akash provider integration
+1. ✅ CLI foundation
+2. ✅ Lease model, provider interface, fake providers, and the `list` command
+3. Akash provider integration
+4. Configuration file
+5. Table output
 
-## Learn more
+See [DESIGN.md](DESIGN.md) for the technical design.
 
-- [DESIGN.md](DESIGN.md): technical design and package boundaries
-- [CONTRIBUTING.md](CONTRIBUTING.md): development setup and checks
-- [LICENSE](LICENSE): MIT
+## License
+
+[MIT](LICENSE)
