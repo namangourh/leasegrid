@@ -1,0 +1,7 @@
+{
+    "leases": [
+        {
+            "lease": {
+                "id": {
+                    "owner": "SECRET-MARKER-must-not-appear-in-errors",
+                    "dseq": "1001",

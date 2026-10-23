@@ -1,0 +1,70 @@
+{
+    "leases": [
+        {
+            "lease": {
+                "id": {
+                    "owner": "akash1testowner0000000000000000000000000000",
+                    "dseq": "1001",
+                    "gseq": 1,
+                    "oseq": 1,
+                    "provider": "akash1testhost00000000000000000000000000000",
+                    "bseq": 0
+                },
+                "state": "active",
+                "price": {
+                    "denom": "uact",
+                    "amount": "5.000000000000000000"
+                },
+                "created_at": "1000",
+                "closed_on": "0",
+                "reason": "",
+                "reclamation": null
+            },
+            "escrow_payment": {
+                "state": {
+                    "owner": "akash1testhost00000000000000000000000000000",
+                    "state": "open",
+                    "rate": {
+                        "denom": "uact",
+                        "amount": "5.000000000000000000"
+                    }
+                }
+            }
+        },
+        {
+            "lease": {
+                "id": {
+                    "owner": "akash1testowner0000000000000000000000000000",
+                    "dseq": "1002",
+                    "gseq": 1,
+                    "oseq": 1,
+                    "provider": "akash1testhost00000000000000000000000000000",
+                    "bseq": 0
+                },
+                "state": "active",
+                "price": {
+                    "denom": "uakt",
+                    "amount": "10.000000000000000000"
+                },
+                "created_at": "1100",
+                "closed_on": "0",
+                "reason": "",
+                "reclamation": null
+            },
+            "escrow_payment": {
+                "state": {
+                    "owner": "akash1testhost00000000000000000000000000000",
+                    "state": "open",
+                    "rate": {
+                        "denom": "uakt",
+                        "amount": "10.000000000000000000"
+                    }
+                }
+            }
+        }
+    ],
+    "pagination": {
+        "next_key": "cGFnZTI=",
+        "total": "3"
+    }
+}

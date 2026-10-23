@@ -1,0 +1,80 @@
+{
+    "deployment": {
+        "id": {
+            "owner": "akash1testowner0000000000000000000000000000",
+            "dseq": "1001"
+        },
+        "state": "active",
+        "created_at": "1000"
+    },
+    "groups": [
+        {
+            "id": {
+                "owner": "akash1testowner0000000000000000000000000000",
+                "dseq": "1001",
+                "gseq": 1
+            },
+            "state": "open",
+            "group_spec": {
+                "name": "web",
+                "resources": [
+                    {
+                        "resource": {
+                            "id": 1,
+                            "cpu": {
+                                "units": {
+                                    "val": "500"
+                                },
+                                "attributes": []
+                            },
+                            "memory": {
+                                "quantity": {
+                                    "val": "536870912"
+                                },
+                                "attributes": []
+                            },
+                            "storage": [
+                                {
+                                    "name": "default",
+                                    "quantity": {
+                                        "val": "1073741824"
+                                    },
+                                    "attributes": []
+                                }
+                            ],
+                            "gpu": {
+                                "units": {
+                                    "val": "0"
+                                },
+                                "attributes": []
+                            },
+                            "endpoints": []
+                        },
+                        "count": 1,
+                        "price": {
+                            "denom": "uact",
+                            "amount": "50000.000000000000000000"
+                        }
+                    }
+                ]
+            }
+        }
+    ],
+    "escrow_account": {
+        "id": {
+            "scope": "deployment",
+            "xid": "akash1testowner0000000000000000000000000000/1001"
+        },
+        "state": {
+            "owner": "akash1testowner0000000000000000000000000000",
+            "state": "open",
+            "funds": [
+                {
+                    "denom": "uact",
+                    "amount": "1800000.000000000000000000"
+                }
+            ],
+            "settled_at": "1500"
+        }
+    }
+}

@@ -1,0 +1,39 @@
+{
+    "leases": [
+        {
+            "lease": {
+                "id": {
+                    "owner": "akash1testowner0000000000000000000000000000",
+                    "dseq": "900",
+                    "gseq": 1,
+                    "oseq": 1,
+                    "provider": "akash1testhost00000000000000000000000000000",
+                    "bseq": 0
+                },
+                "state": "closed",
+                "price": {
+                    "denom": "uakt",
+                    "amount": "2.500000000000000000"
+                },
+                "created_at": "500",
+                "closed_on": "800",
+                "reason": "lease_closed_owner",
+                "reclamation": null
+            },
+            "escrow_payment": {
+                "state": {
+                    "owner": "akash1testhost00000000000000000000000000000",
+                    "state": "closed",
+                    "rate": {
+                        "denom": "uakt",
+                        "amount": "2.500000000000000000"
+                    }
+                }
+            }
+        }
+    ],
+    "pagination": {
+        "next_key": null,
+        "total": "3"
+    }
+}
