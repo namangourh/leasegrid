@@ -141,15 +141,21 @@ func (p *Provider) ListLeases(ctx context.Context) ([]lease.Lease, error) {
 	}
 
 	conv := converter{now: p.now(), blockTime: p.blockTime}
+
+	// Validate every lease record (ID, state, price) before making any more
+	// requests: a bad lease list costs one request, not one per deployment,
+	// and no request is ever built from invalid data.
+	for _, d := range dtos {
+		if _, err := conv.toLease(d, nil, nil); err != nil {
+			return nil, err
+		}
+	}
+
 	deployments := make(map[string]*deploymentResponse)
 	leases := make([]lease.Lease, 0, len(dtos))
 	for _, d := range dtos {
-		// Check the ID before using its dseq in a request.
-		if _, err := leaseKey(d.ID); err != nil {
-			return nil, badResponse("lease: %v", err)
-		}
-
 		var dep *deploymentResponse
+
 		var spend *big.Rat
 		if d.State != "closed" {
 			if dep, err = p.deployment(ctx, deployments, d.ID.DSeq); err != nil {
