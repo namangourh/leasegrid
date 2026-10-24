@@ -12,7 +12,8 @@ leases, what they cost, or when they run out. LeaseGrid aims to be that single v
 
 ## Status
 
-Early development. **No provider is implemented yet. Akash integration is next.**
+Early development. **The Akash provider is built and tested, but not yet wired
+into the CLI**, so `leasegrid list` can't show real leases yet.
 
 What works today:
 
@@ -23,6 +24,8 @@ What works today:
   and tested against in-memory fake providers. With no provider enabled, it reports
   `no providers configured`; enabling a provider reports that it is not implemented
   yet. Both exit with status 1.
+- An Akash provider (an internal package) that reads leases from Akash's public
+  REST API, tested end to end against sanitized recordings of real responses
 
 
 ## Install
@@ -94,11 +97,10 @@ Rules:
 - All validation problems are reported at once.
 - The file never holds credentials.
 
-No provider is implemented yet, so enabling one currently reports
-`provider "akash" is not implemented yet`.
+The Akash provider exists but can't be enabled from the config file yet, so
+enabling a provider currently reports `provider "akash" is not implemented yet`.
 
 ## Development
-
 
 ```sh
 gofmt -l .           # must print nothing
@@ -115,8 +117,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 1. ✅ CLI foundation
 2. ✅ Lease model, provider interface, fake providers, and the `list` command
 3. ✅ Configuration file
-4. Akash provider integration
-5. Table output
+4. ✅ Akash provider (tested against recorded API responses)
+5. Wire Akash into `leasegrid list` through the config file
+6. Table output
 
 See [DESIGN.md](DESIGN.md) for the technical design.
 
