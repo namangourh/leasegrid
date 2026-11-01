@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/namangourh/leasegrid/internal/app"
 	"github.com/namangourh/leasegrid/internal/config"
@@ -199,5 +200,5 @@ func runList(ctx context.Context, args []string, configPath string, d deps) erro
 	if err != nil {
 		return err
 	}
-	return output.Write(d.stdout, format, leases)
+	return output.Write(d.stdout, format, time.Now(), leases)
 }

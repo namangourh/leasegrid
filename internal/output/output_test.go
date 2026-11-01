@@ -20,6 +20,7 @@ func TestParseFormat(t *testing.T) {
 	}{
 		{in: "json", want: output.FormatJSON},
 		{in: "yaml", wantErr: output.ErrUnknownFormat},
+		{in: "table", want: output.FormatTable},
 		{in: "JSON", wantErr: output.ErrUnknownFormat}, // names are case-sensitive
 		{in: "", wantErr: output.ErrUnknownFormat},
 	}
@@ -49,7 +50,7 @@ func TestWriteJSONExact(t *testing.T) {
 ]
 `
 	var buf bytes.Buffer
-	if err := output.Write(&buf, output.FormatJSON, leases); err != nil {
+	if err := output.Write(&buf, output.FormatJSON, time.Time{}, leases); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 	if got := buf.String(); got != want {
@@ -80,7 +81,7 @@ func TestWriteJSONRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := output.Write(&buf, output.FormatJSON, tt.leases); err != nil {
+			if err := output.Write(&buf, output.FormatJSON, time.Time{}, tt.leases); err != nil {
 				t.Fatalf("Write() error = %v", err)
 			}
 
@@ -106,15 +107,20 @@ var errWrite = errors.New("write failed")
 func (failingWriter) Write([]byte) (int, error) { return 0, errWrite }
 
 func TestWriteReturnsWriterError(t *testing.T) {
-	err := output.Write(failingWriter{}, output.FormatJSON, nil)
-	if !errors.Is(err, errWrite) {
-		t.Fatalf("Write() error = %v, want %v", err, errWrite)
+	leases := []lease.Lease{{ID: "a1", Provider: "akash", Name: "web", Status: lease.StatusActive}}
+	for _, f := range []output.Format{output.FormatTable, output.FormatJSON} {
+		t.Run(string(f), func(t *testing.T) {
+			err := output.Write(failingWriter{}, f, time.Time{}, leases)
+			if !errors.Is(err, errWrite) {
+				t.Fatalf("Write() error = %v, want %v", err, errWrite)
+			}
+		})
 	}
 }
 
 func TestWriteUnknownFormat(t *testing.T) {
 	var buf bytes.Buffer
-	err := output.Write(&buf, output.Format("yaml"), nil)
+	err := output.Write(&buf, output.Format("yaml"), time.Time{}, nil)
 	if !errors.Is(err, output.ErrUnknownFormat) {
 		t.Fatalf("Write() error = %v, want %v", err, output.ErrUnknownFormat)
 	}
@@ -154,7 +160,7 @@ func TestWriteJSONFullLease(t *testing.T) {
 ]
 `
 	var buf bytes.Buffer
-	if err := output.Write(&buf, output.FormatJSON, leases); err != nil {
+	if err := output.Write(&buf, output.FormatJSON, time.Time{}, leases); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 	if got := buf.String(); got != want {
