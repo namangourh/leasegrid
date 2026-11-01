@@ -43,6 +43,14 @@ func (s Status) Valid() bool {
 	}
 }
 
+// ParseStatus converts a --status flag value into a Status.
+func ParseStatus(s string) (Status, error) {
+	if st := Status(s); st.Valid() {
+		return st, nil
+	}
+	return "", fmt.Errorf("%w %q (supported: active, closed, insufficient_funds)", ErrUnknownStatus, s)
+}
+
 // Cost is what a lease costs per hour, as an integer amount of the
 // denomination's smallest unit (1 AKT = 1,000,000 uakt). Integers keep sums
 // exact; convert to whole units only for display.
@@ -89,13 +97,19 @@ func (l Lease) Validate() error {
 // ExpiresWithin reports whether l has a known expiry before now+d. Leases with
 // an unknown (zero) expiry never count as expiring.
 func (l Lease) ExpiresWithin(now time.Time, d time.Duration) bool {
-	return !l.Expires.IsZero() && l.Expires.Before(now.Add(d))
+	return l.expiresBefore(now.Add(d))
+}
+
+// expiresBefore reports whether l has a known expiry before t.
+func (l Lease) expiresBefore(t time.Time) bool {
+	return !l.Expires.IsZero() && l.Expires.Before(t)
 }
 
 // Criteria selects leases. A zero-value field matches any lease.
 type Criteria struct {
-	Provider string // match this provider name; "" matches all
-	Status   Status // match this status; "" matches all
+	Provider      string    // match this provider name; "" matches all
+	Status        Status    // match this status; "" matches all
+	ExpiresBefore time.Time // match leases with a known expiry before this time; zero matches all
 }
 
 // Filter returns the leases that match c, in their original order.
@@ -109,7 +123,11 @@ func Filter(leases []Lease, c Criteria) []Lease {
 		if c.Status != "" && l.Status != c.Status {
 			continue
 		}
+		if !c.ExpiresBefore.IsZero() && !l.expiresBefore(c.ExpiresBefore) {
+			continue
+		}
 		out = append(out, l)
+
 	}
 	return out
 }

@@ -10,9 +10,10 @@ import (
 )
 
 func TestFilter(t *testing.T) {
-	a1 := Lease{ID: "a1", Provider: "akash", Name: "web", Status: StatusActive}
-	a2 := Lease{ID: "a2", Provider: "akash", Name: "db", Status: StatusClosed}
-	f1 := Lease{ID: "f1", Provider: "flux", Name: "api", Status: StatusActive}
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	a1 := Lease{ID: "a1", Provider: "akash", Name: "web", Status: StatusActive, Expires: now.Add(time.Hour)}
+	a2 := Lease{ID: "a2", Provider: "akash", Name: "db", Status: StatusClosed} // unknown expiry
+	f1 := Lease{ID: "f1", Provider: "flux", Name: "api", Status: StatusActive, Expires: now.Add(48 * time.Hour)}
 	all := []Lease{a1, a2, f1}
 
 	tests := []struct {
@@ -25,6 +26,8 @@ func TestFilter(t *testing.T) {
 		{name: "by provider", leases: all, criteria: Criteria{Provider: "akash"}, want: []Lease{a1, a2}},
 		{name: "by status", leases: all, criteria: Criteria{Status: StatusActive}, want: []Lease{a1, f1}},
 		{name: "provider and status", leases: all, criteria: Criteria{Provider: "akash", Status: StatusActive}, want: []Lease{a1}},
+		{name: "expires before", leases: all, criteria: Criteria{ExpiresBefore: now.Add(24 * time.Hour)}, want: []Lease{a1}},
+		{name: "status and expiry", leases: all, criteria: Criteria{Status: StatusActive, ExpiresBefore: now.Add(72 * time.Hour)}, want: []Lease{a1, f1}},
 		{name: "no match", leases: all, criteria: Criteria{Provider: "render"}, want: []Lease{}},
 		{name: "nil input", leases: nil, criteria: Criteria{}, want: []Lease{}},
 	}
@@ -102,6 +105,7 @@ func TestExpiresWithin(t *testing.T) {
 		{name: "inside the window", expires: now.Add(time.Hour), want: true},
 		{name: "after the window", expires: now.Add(48 * time.Hour), want: false},
 		{name: "already expired", expires: now.Add(-time.Hour), want: true},
+		{name: "exactly at the end of the window", expires: now.Add(24 * time.Hour), want: false},
 	}
 
 	for _, tt := range tests {
@@ -111,5 +115,19 @@ func TestExpiresWithin(t *testing.T) {
 				t.Errorf("ExpiresWithin() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseStatus(t *testing.T) {
+	for _, s := range []Status{StatusActive, StatusClosed, StatusInsufficientFunds} {
+		if got, err := ParseStatus(string(s)); err != nil || got != s {
+			t.Errorf("ParseStatus(%q) = %q, %v; want %q, nil", s, got, err, s)
+		}
+	}
+
+	_, err := ParseStatus("expiring")
+	want := `unsupported status "expiring" (supported: active, closed, insufficient_funds)`
+	if !errors.Is(err, ErrUnknownStatus) || err.Error() != want {
+		t.Errorf("ParseStatus(\"expiring\") error = %v, want %q", err, want)
 	}
 }
