@@ -18,7 +18,7 @@ import (
 type Lease struct {
 	ID        string    `json:"id" yaml:"id"`
 	Provider  string    `json:"provider" yaml:"provider"` // provider name, e.g. "akash"
-	Name      string    `json:"name" yaml:"name"`
+	Name      string    `json:"name" yaml:"name"`         // the owner's name for the workload; for Akash, the placement group name
 	Status    Status    `json:"status" yaml:"status"`
 	Expires   time.Time `json:"expires,omitzero" yaml:"expires,omitempty"` // estimated; zero means unknown
 	Cost      Cost      `json:"cost,omitzero" yaml:"cost,omitempty"`
