@@ -15,6 +15,7 @@ import (
 	"github.com/namangourh/leasegrid/internal/config"
 	"github.com/namangourh/leasegrid/internal/lease"
 	"github.com/namangourh/leasegrid/internal/output"
+	"github.com/namangourh/leasegrid/internal/providers/demo"
 )
 
 // version is a var, not a const, so release builds can override it with
@@ -37,10 +38,14 @@ Flags:
 `
 
 // listUsage is the help text for the list command.
-const listUsage = `List leases from the configured providers.
+const listUsage = `List leases from the configured providers, soonest expiry first.
 
 Usage:
   leasegrid list [flags]
+
+Examples:
+  leasegrid list --expiring-within 24h
+  leasegrid list --provider demo-a --status active --format json
 
 Flags:
 `
@@ -49,19 +54,24 @@ Flags:
 // have already been printed to stderr, so main only sets the exit code.
 var errUsage = errors.New("invalid usage")
 
-// deps is everything run needs from outside: where to write output and how
-// to build the application service. main supplies real values; tests
-// supply buffers and fake providers.
+// deps is everything run needs from outside: where to write output, the
+// clock, and how to build the application service. main supplies real
+// values; tests supply buffers, a fixed clock and fake providers.
 type deps struct {
-	stdout     io.Writer
-	stderr     io.Writer
-	newService func(configPath string) (*app.Service, error) // called only by commands that need providers; "" means the default location
+	stdout io.Writer
+	stderr io.Writer
+	now    func() time.Time
+
+	// newService builds the service from the config file at configPath (""
+	// means the default location), with now as the providers' clock. Only
+	// commands that need providers call it.
+	newService func(configPath string, now func() time.Time) (*app.Service, error)
 }
 
 func main() {
 	// Ctrl+C cancels ctx, which makes in-flight provider calls return.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	err := run(ctx, os.Args[1:], deps{stdout: os.Stdout, stderr: os.Stderr, newService: loadService})
+	err := run(ctx, os.Args[1:], deps{stdout: os.Stdout, stderr: os.Stderr, now: time.Now, newService: loadService})
 	stop() // os.Exit skips deferred calls, so release the signal handler explicitly
 
 	if err != nil && !errors.Is(err, errUsage) {
@@ -87,12 +97,12 @@ func exitCode(err error) int {
 }
 
 // loadService loads the configuration and builds the service from it.
-func loadService(configPath string) (*app.Service, error) {
+func loadService(configPath string, now func() time.Time) (*app.Service, error) {
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return nil, err
 	}
-	return buildService(cfg)
+	return buildService(cfg, now)
 }
 
 // loadConfig applies the file-location rules: an explicit path must exist,
@@ -108,15 +118,20 @@ func loadConfig(configPath string) (config.Config, error) {
 	return config.LoadOptional(path)
 }
 
-// buildService turns configuration into an application service. It is the
-// only code that knows concrete provider implementations: the program's
-// composition root. No provider is implemented yet, so any enabled provider
-// is an error; the Akash slice adds the first real one here.
-func buildService(cfg config.Config) (*app.Service, error) {
-	if names := cfg.EnabledProviders(); len(names) > 0 {
-		return nil, fmt.Errorf("provider %q is not implemented yet", names[0])
+// buildService turns configuration into an application service, giving
+// providers now as their clock. It is the only code that knows concrete
+// provider implementations: the program's composition root. Only the demo
+// providers exist so far; the Akash slice adds the first real one here.
+func buildService(cfg config.Config, now func() time.Time) (*app.Service, error) {
+	var ps []app.Provider
+	for _, name := range cfg.EnabledProviders() {
+		p, ok := demo.New(name, now)
+		if !ok {
+			return nil, fmt.Errorf("provider %q is not implemented yet (available: %s, %s)", name, demo.NameA, demo.NameB)
+		}
+		ps = append(ps, p)
 	}
-	return app.New(), nil
+	return app.New(ps...), nil
 }
 
 // run executes the CLI. It never calls os.Exit, so tests can call it
@@ -162,13 +177,19 @@ func run(ctx context.Context, args []string, d deps) error {
 
 // runList implements "leasegrid list": it parses list's flags, asks the
 // application service (built from the config at configPath) for leases, and
-// writes them in the chosen format.
+// writes them in the chosen format. Every flag is validated before any
+// provider is called.
 func runList(ctx context.Context, args []string, configPath string, d deps) error {
+	// Read the clock once, so the providers, the --expiring-within cutoff and
+	// the table's relative times all agree on what "now" is. UTC to the second
+	// keeps times in JSON short and the same in every time zone.
+	now := d.now().UTC().Truncate(time.Second)
+
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(d.stderr)
 
-	format := output.FormatJSON
-	fs.Func("format", "output format: json (default json)", func(s string) error {
+	format := output.FormatTable
+	fs.Func("format", "output `format`: table or json (default table)", func(s string) error {
 		f, err := output.ParseFormat(s)
 		if err != nil {
 			return err
@@ -176,7 +197,37 @@ func runList(ctx context.Context, args []string, configPath string, d deps) erro
 		format = f
 		return nil
 	})
-	provider := fs.String("provider", "", "list leases from this provider only")
+	provider := fs.String("provider", "", "list leases from the provider with this `name` only")
+	var status lease.Status
+	fs.Func("status", "list only leases with this `status`: active, closed or insufficient_funds", func(s string) error {
+		st, err := lease.ParseStatus(s)
+		if err != nil {
+			return err
+		}
+		status = st
+		return nil
+	})
+	sortBy := app.DefaultSort
+	fs.Func("sort-by", "sort by this `key`: id, provider, status or expires (default expires)", func(s string) error {
+		k, err := lease.ParseSortKey(s)
+		if err != nil {
+			return err
+		}
+		sortBy = k
+		return nil
+	})
+	var expiringWithin time.Duration
+	fs.Func("expiring-within", "list only leases that expire within this `duration`, e.g. 90m or 24h (a week is 168h)", func(s string) error {
+		within, err := time.ParseDuration(s)
+		if err != nil {
+			return errors.New("not a duration such as 90m or 24h")
+		}
+		if within <= 0 {
+			return errors.New("must be greater than zero")
+		}
+		expiringWithin = within
+		return nil
+	})
 
 	fs.Usage = func() {
 		// Nothing useful can be done if writing help text fails.
@@ -191,14 +242,30 @@ func runList(ctx context.Context, args []string, configPath string, d deps) erro
 		return fmt.Errorf("%w: %w", errUsage, err)
 	}
 
-	svc, err := d.newService(configPath)
+	criteria := lease.Criteria{Provider: *provider, Status: status}
+	if expiringWithin > 0 {
+		criteria.ExpiresBefore = now.Add(expiringWithin)
+	}
 
+	svc, err := d.newService(configPath, func() time.Time { return now })
 	if err != nil {
 		return err
 	}
-	leases, err := svc.ListLeases(ctx, app.ListOptions{Criteria: lease.Criteria{Provider: *provider}})
+	leases, err := svc.ListLeases(ctx, app.ListOptions{Criteria: criteria, SortBy: sortBy})
+	if errors.Is(err, app.ErrUnknownProvider) {
+		// A mistyped --provider is a usage error. main doesn't print usage
+		// errors, so print this one here.
+		_, _ = fmt.Fprintf(d.stderr, "leasegrid: %v\n", err)
+		return fmt.Errorf("%w: %w", errUsage, err)
+	}
 	if err != nil {
 		return err
 	}
-	return output.Write(d.stdout, format, time.Now(), leases)
+
+	if len(leases) == 0 && format == output.FormatTable {
+		// Keep stdout for data: an empty table is reported on stderr.
+		_, err := fmt.Fprintln(d.stderr, "No leases found.")
+		return err
+	}
+	return output.Write(d.stdout, format, now, leases)
 }

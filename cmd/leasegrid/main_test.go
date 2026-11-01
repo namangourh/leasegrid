@@ -76,14 +76,20 @@ func runBinary(t *testing.T, args ...string) (string, int) {
 	return string(out), 0
 }
 
-// newTestDeps returns deps whose service uses ps, plus the buffers that
-// capture what run writes to stdout and stderr.
+// testNow is the fixed time the tests' clock returns.
+var testNow = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+
+func testClock() time.Time { return testNow }
+
+// newTestDeps returns deps whose service uses ps and whose clock is fixed at
+// testNow, plus the buffers that capture what run writes to stdout and stderr.
 func newTestDeps(ps ...app.Provider) (deps, *bytes.Buffer, *bytes.Buffer) {
 	var stdout, stderr bytes.Buffer
 	d := deps{
 		stdout:     &stdout,
 		stderr:     &stderr,
-		newService: func(string) (*app.Service, error) { return app.New(ps...), nil },
+		now:        testClock,
+		newService: func(string, func() time.Time) (*app.Service, error) { return app.New(ps...), nil },
 	}
 	return d, &stdout, &stderr
 }
@@ -143,8 +149,7 @@ func TestListJSON(t *testing.T) {
 		want []lease.Lease
 	}{
 		{name: "explicit json format", args: []string{"list", "--format", "json"}, want: []lease.Lease{web, db, api}},
-		{name: "json is the default", args: []string{"list"}, want: []lease.Lease{web, db, api}},
-		{name: "filter by provider", args: []string{"list", "--provider", "flux"}, want: []lease.Lease{api}},
+		{name: "filter by provider", args: []string{"list", "--provider", "flux", "--format", "json"}, want: []lease.Lease{api}},
 	}
 
 	for _, tt := range tests {
@@ -180,14 +185,6 @@ func TestListErrors(t *testing.T) {
 		wantMsg   string // must appear in stderr or in the returned error
 	}{
 		{
-			name:      "unknown format",
-			providers: []app.Provider{akash},
-			args:      []string{"list", "--format", "yaml"},
-			wantErr:   errUsage,
-			wantCode:  2,
-			wantMsg:   `unknown output format "yaml"`,
-		},
-		{
 			name:      "provider error",
 			providers: []app.Provider{fluxDown},
 			args:      []string{"list"},
@@ -207,7 +204,7 @@ func TestListErrors(t *testing.T) {
 			providers: []app.Provider{akash},
 			args:      []string{"list", "--provider", "render"},
 			wantErr:   app.ErrUnknownProvider,
-			wantCode:  1,
+			wantCode:  2,
 			wantMsg:   `unknown provider "render"`,
 		},
 	}
@@ -234,6 +231,174 @@ func TestListErrors(t *testing.T) {
 				t.Errorf("stdout = %q, want empty on error", stdout.String())
 			}
 		})
+	}
+}
+
+// demoConfig is the example config that enables both demo providers. The
+// README points users at it, so these tests keep the documented demo working.
+var demoConfig = filepath.Join("..", "..", "examples", "demo.yaml")
+
+// runDemo runs leasegrid with --config demoConfig followed by args, using
+// real config loading and the demo providers, with the clock fixed at testNow.
+func runDemo(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	d := deps{stdout: &out, stderr: &errOut, now: testClock, newService: loadService}
+	err = run(t.Context(), append([]string{"--config", demoConfig}, args...), d)
+	return out.String(), errOut.String(), err
+}
+
+// TestListDemoTable is the golden test for the README demo: with the clock
+// fixed, the default command prints exactly this table on every run.
+func TestListDemoTable(t *testing.T) {
+	want := `ID        PROVIDER  NAME    STATUS              EXPIRES                                  COST/HOUR
+1001/1/1  demo-b    worker  insufficient_funds  2026-10-20 10:00 UTC (expired 2h0m ago)  900 uakt
+1001/1/1  demo-a    web     active              2026-10-20 15:00 UTC (in 3h0m)           4990 ibc/170C...F2F1
+2001/1/1  demo-b    gpu     active              2026-10-20 15:00 UTC (in 3h0m)           36000 uakt
+1002/1/1  demo-a    api     active              2026-10-30 12:00 UTC (in 10d0h)          1800 uakt
+1003/1/1  demo-a    batch   closed              -                                        1200 uakt
+`
+	stdout, stderr, err := runDemo(t, "list")
+	if err != nil {
+		t.Fatalf("run() error = %v\nstderr: %s", err, stderr)
+	}
+	if stdout != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+// TestListDemo checks which leases each combination of flags selects, and in
+// what order, through real config loading and the demo providers. Every demo
+// lease has a different name, so the list of names identifies the result.
+func TestListDemo(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string // lease names, in output order
+	}{
+		{name: "no flags", args: nil, want: []string{"worker", "web", "gpu", "api", "batch"}},
+		{name: "one provider", args: []string{"--provider", "demo-a"}, want: []string{"web", "api", "batch"}},
+		{name: "one status", args: []string{"--status", "active"}, want: []string{"web", "gpu", "api"}},
+		{name: "provider and status", args: []string{"--provider", "demo-b", "--status", "active"}, want: []string{"gpu"}},
+		{name: "expiring within includes expired", args: []string{"--expiring-within", "24h"}, want: []string{"worker", "web", "gpu"}},
+		{name: "expiry at the cutoff is excluded", args: []string{"--expiring-within", "3h"}, want: []string{"worker"}},
+		{name: "expiring within and status", args: []string{"--expiring-within", "24h", "--status", "active"}, want: []string{"web", "gpu"}},
+		{name: "sort by expires is the default", args: []string{"--sort-by", "expires"}, want: []string{"worker", "web", "gpu", "api", "batch"}},
+		{name: "sort by id, provider breaks ties", args: []string{"--sort-by", "id"}, want: []string{"web", "worker", "api", "batch", "gpu"}},
+		{name: "sort by provider, id breaks ties", args: []string{"--sort-by", "provider"}, want: []string{"web", "api", "batch", "worker", "gpu"}},
+		{name: "sort by status in lifecycle order", args: []string{"--sort-by", "status"}, want: []string{"web", "api", "gpu", "worker", "batch"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr, err := runDemo(t, append([]string{"list", "--format", "json"}, tt.args...)...)
+			if err != nil {
+				t.Fatalf("run() error = %v\nstderr: %s", err, stderr)
+			}
+			var leases []lease.Lease
+			if err := json.Unmarshal([]byte(stdout), &leases); err != nil {
+				t.Fatalf("stdout is not valid JSON: %v\nstdout: %q", err, stdout)
+			}
+			var got []string
+			for _, l := range leases {
+				got = append(got, l.Name)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("lease names = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestListEmpty checks that an empty result keeps stdout for data: the table
+// prints nothing there and says so on stderr, while JSON prints [].
+func TestListEmpty(t *testing.T) {
+	tests := []struct {
+		format     string
+		wantStdout string
+		wantStderr string
+	}{
+		{format: "table", wantStdout: "", wantStderr: "No leases found.\n"},
+		{format: "json", wantStdout: "[]\n", wantStderr: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.format, func(t *testing.T) {
+			stdout, stderr, err := runDemo(t, "list", "--provider", "demo-b", "--status", "closed", "--format", tt.format)
+			if err != nil {
+				t.Fatalf("run() error = %v, want success\nstderr: %s", err, stderr)
+			}
+			if stdout != tt.wantStdout {
+				t.Errorf("stdout = %q, want %q", stdout, tt.wantStdout)
+			}
+			if stderr != tt.wantStderr {
+				t.Errorf("stderr = %q, want %q", stderr, tt.wantStderr)
+			}
+		})
+	}
+}
+
+// TestListInvalidFlags checks that a bad flag is a usage error (exit 2) that
+// names the problem and writes nothing to stdout. It is caught before the
+// service is even built, so no provider is ever called.
+func TestListInvalidFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantMsg string // must appear in stderr
+	}{
+		{name: "unknown format", args: []string{"--format", "yaml"}, wantMsg: `invalid value "yaml" for flag -format: unknown output format "yaml"`},
+		{name: "expiring is not a status", args: []string{"--status", "expiring"}, wantMsg: `invalid value "expiring" for flag -status: unsupported status "expiring"`},
+		{name: "cost is not a sort key", args: []string{"--sort-by", "cost"}, wantMsg: `invalid value "cost" for flag -sort-by: unknown sort key "cost"`},
+		{name: "days are not a duration unit", args: []string{"--expiring-within", "3d"}, wantMsg: "not a duration such as 90m or 24h"},
+		{name: "zero duration", args: []string{"--expiring-within", "0"}, wantMsg: "must be greater than zero"},
+		{name: "negative duration", args: []string{"--expiring-within", "-1h"}, wantMsg: "must be greater than zero"},
+		{name: "missing value", args: []string{"--status"}, wantMsg: "flag needs an argument: -status"},
+		{name: "unknown flag", args: []string{"--reverse"}, wantMsg: "flag provided but not defined: -reverse"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, stdout, stderr := newTestDeps()
+			built := false
+			d.newService = func(string, func() time.Time) (*app.Service, error) {
+				built = true
+				return app.New(), nil
+			}
+
+			err := run(t.Context(), append([]string{"list"}, tt.args...), d)
+			if code := exitCode(err); code != 2 {
+				t.Errorf("exit code = %d, want 2 (error: %v)", code, err)
+			}
+			if !strings.Contains(stderr.String(), tt.wantMsg) {
+				t.Errorf("stderr does not contain %q:\n%s", tt.wantMsg, stderr)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			if built {
+				t.Error("the service was built, want the flag rejected before any provider is called")
+			}
+		})
+	}
+}
+
+// TestListTableReplacesControlCharacters checks, at the CLI boundary, that
+// text from a provider can't send escape sequences to the user's terminal.
+func TestListTableReplacesControlCharacters(t *testing.T) {
+	// \x1b]0;...\a sets the terminal window's title; \x1b[2J clears the screen.
+	evil := &fake.Provider{ProviderName: "evil", Leases: []lease.Lease{
+		{ID: "1", Provider: "evil", Name: "\x1b]0;pwned\a\x1b[2J", Status: lease.StatusActive},
+	}}
+	d, stdout, stderr := newTestDeps(evil)
+	if err := run(t.Context(), []string{"list"}, d); err != nil {
+		t.Fatalf("run() error = %v\nstderr: %s", err, stderr)
+	}
+	if strings.ContainsAny(stdout.String(), "\x1b\a") {
+		t.Errorf("stdout = %q, want no control characters", stdout.String())
 	}
 }
 
@@ -280,13 +445,20 @@ func TestBuildService(t *testing.T) {
 		{
 			name:    "enabled provider not implemented",
 			cfg:     config.Config{Providers: []config.ProviderConfig{{Name: "akash", Enabled: true}}},
-			wantErr: `provider "akash" is not implemented yet`,
+			wantErr: `provider "akash" is not implemented yet (available: demo-a, demo-b)`,
+		},
+		{
+			name: "demo providers",
+			cfg: config.Config{Providers: []config.ProviderConfig{
+				{Name: "demo-a", Enabled: true},
+				{Name: "demo-b", Enabled: true},
+			}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, err := buildService(tt.cfg)
+			svc, err := buildService(tt.cfg, testClock)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("buildService() error = %v, want it to contain %q", err, tt.wantErr)
@@ -307,7 +479,7 @@ func TestBuildService(t *testing.T) {
 func TestLoadService(t *testing.T) {
 	t.Run("no file at the default location", func(t *testing.T) {
 		isolateUserConfig(t)
-		svc, err := loadService("")
+		svc, err := loadService("", testClock)
 		if err != nil {
 			t.Fatalf("loadService() error = %v", err)
 		}
@@ -330,7 +502,7 @@ func TestLoadService(t *testing.T) {
 			t.Fatalf("write config: %v", err)
 		}
 
-		_, err = loadService("")
+		_, err = loadService("", testClock)
 		if err == nil || !strings.Contains(err.Error(), `provider "akash" is not implemented yet`) {
 			t.Fatalf("loadService() error = %v, want provider not implemented", err)
 		}
@@ -342,7 +514,7 @@ func TestLoadService(t *testing.T) {
 		if err := os.WriteFile(path, []byte("providers:\n  - name: flux\n    enabled: true\n"), 0o600); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
-		_, err := loadService(path)
+		_, err := loadService(path, testClock)
 		if err == nil || !strings.Contains(err.Error(), `provider "flux" is not implemented yet`) {
 			t.Fatalf("loadService() error = %v, want provider not implemented", err)
 		}
@@ -350,7 +522,7 @@ func TestLoadService(t *testing.T) {
 
 	t.Run("explicit path must exist", func(t *testing.T) {
 		isolateUserConfig(t)
-		_, err := loadService(filepath.Join(t.TempDir(), "missing.yaml"))
+		_, err := loadService(filepath.Join(t.TempDir(), "missing.yaml"), testClock)
 		if !errors.Is(err, fs.ErrNotExist) {
 			t.Fatalf("loadService() error = %v, want fs.ErrNotExist", err)
 		}
@@ -536,7 +708,7 @@ func TestConfigFlag(t *testing.T) {
 			}
 
 			var stdout, stderr bytes.Buffer
-			err := run(t.Context(), args, deps{stdout: &stdout, stderr: &stderr, newService: loadService})
+			err := run(t.Context(), args, deps{stdout: &stdout, stderr: &stderr, now: testClock, newService: loadService})
 
 			if code := exitCode(err); code != tt.wantCode {
 				t.Fatalf("exit code = %d, want %d (error: %v)\nstderr: %s", code, tt.wantCode, err, stderr.String())
@@ -583,6 +755,10 @@ func TestBinaryConfig(t *testing.T) {
 		{name: "malformed file", args: []string{"--config", malformed, "list"}, wantCode: 1, wantOut: "invalid configuration"},
 		{name: "missing file", args: []string{"--config", missing, "list"}, wantCode: 1, wantOut: "leasegrid: read config"},
 		{name: "version ignores config", args: []string{"--config", missing, "--version"}, wantCode: 0, wantOut: "leasegrid 0.1.0"},
+		{name: "demo config", args: []string{"--config", demoConfig, "list"}, wantCode: 0, wantOut: "4990 ibc/170C...F2F1"},
+		{name: "demo empty result", args: []string{"--config", demoConfig, "list", "--provider", "demo-b", "--status", "closed"}, wantCode: 0, wantOut: "No leases found."},
+		{name: "demo unknown provider", args: []string{"--config", demoConfig, "list", "--provider", "akahs"}, wantCode: 2, wantOut: `leasegrid: unknown provider "akahs" (configured: demo-a, demo-b)`},
+		{name: "demo invalid status", args: []string{"--config", demoConfig, "list", "--status", "expiring"}, wantCode: 2, wantOut: `invalid value "expiring" for flag -status`},
 	}
 
 	for _, tt := range tests {

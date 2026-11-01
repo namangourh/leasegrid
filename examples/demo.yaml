@@ -1,0 +1,7 @@
+# Try LeaseGrid without a network connection or an account:
+#   leasegrid --config examples/demo.yaml list
+providers:
+  - name: demo-a
+    enabled: true
+  - name: demo-b
+    enabled: true
