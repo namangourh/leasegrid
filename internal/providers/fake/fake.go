@@ -9,22 +9,31 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/namangourh/leasegrid/internal/lease"
 )
 
-// Provider returns a fixed set of leases, or a fixed error.
+// Provider returns a fixed set of leases, or a fixed error. It counts the
+// calls to ListLeases, so tests can check how often a provider was asked.
 type Provider struct {
 	ProviderName string        // returned by Name
 	Leases       []lease.Lease // returned by ListLeases
 	Err          error         // if non-nil, ListLeases returns it instead of leases
+
+	calls atomic.Int64 // safe even if callers query providers concurrently
 }
 
 // Name returns the configured provider name.
 func (p *Provider) Name() string { return p.ProviderName }
 
+// Calls returns how many times ListLeases has been called, including calls
+// that returned an error.
+func (p *Provider) Calls() int { return int(p.calls.Load()) }
+
 // ListLeases returns the configured error, or a copy of the configured leases.
 func (p *Provider) ListLeases(ctx context.Context) ([]lease.Lease, error) {
+	p.calls.Add(1)
 	if err := ctx.Err(); err != nil {
 		return nil, err // already cancelled: behave like a real provider would
 	}

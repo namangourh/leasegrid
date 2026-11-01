@@ -74,6 +74,22 @@ func TestProviderListLeasesCancelled(t *testing.T) {
 	}
 }
 
+func TestProviderCountsCalls(t *testing.T) {
+	p := &fake.Provider{ProviderName: "fake", Err: errors.New("provider down")}
+	if got := p.Calls(); got != 0 {
+		t.Fatalf("Calls() before any call = %d, want 0", got)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _ = p.ListLeases(t.Context()) // returns the configured error
+	_, _ = p.ListLeases(ctx)         // returns context.Canceled
+
+	if got := p.Calls(); got != 2 {
+		t.Errorf("Calls() = %d, want 2: failed calls count too", got)
+	}
+}
+
 func TestProviderName(t *testing.T) {
 	p := &fake.Provider{ProviderName: "fake"}
 	if got := p.Name(); got != "fake" {
