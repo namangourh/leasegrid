@@ -4,10 +4,12 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/namangourh/leasegrid/internal/lease"
 	"github.com/namangourh/leasegrid/internal/providers"
@@ -51,9 +53,21 @@ func New(ps ...Provider) *Service {
 	return &Service{providers: slices.Clone(ps)}
 }
 
-// ListLeases returns the leases matching criteria. If criteria.Provider is
-// set, only that provider is queried. Providers return all their leases; the
-// criteria are applied here.
+// DefaultSort is the order ListLeases uses when ListOptions.SortBy is empty:
+// soonest expiry first.
+const DefaultSort = lease.SortByExpires
+
+// ListOptions selects and orders the leases ListLeases returns.
+type ListOptions struct {
+	Criteria lease.Criteria // which leases to return
+	SortBy   lease.SortKey  // how to order them; "" means DefaultSort
+}
+
+// ListLeases returns the leases matching opts.Criteria, sorted by
+// opts.SortBy. If opts.Criteria.Provider is set, only that provider is
+// queried. Providers return all their leases; filtering and sorting happen
+// here, so every provider gets the same semantics. Invalid options are
+// rejected before any provider is called.
 //
 // Every lease a provider returns is checked against the Provider contract,
 // so a buggy adapter is reported as providers.ErrBadResponse instead of
@@ -62,14 +76,19 @@ func New(ps ...Provider) *Service {
 // Providers are queried one after another and the first error stops the
 // call. Concurrent queries and partial results come with the second real
 // provider.
-func (s *Service) ListLeases(ctx context.Context, criteria lease.Criteria) ([]lease.Lease, error) {
+func (s *Service) ListLeases(ctx context.Context, opts ListOptions) ([]lease.Lease, error) {
+	sortBy := cmp.Or(opts.SortBy, DefaultSort)
+	if _, err := lease.ParseSortKey(string(sortBy)); err != nil {
+		return nil, err
+	}
 	if len(s.providers) == 0 {
 		return nil, ErrNoProviders
 	}
 
-	selected := s.selectProviders(criteria.Provider)
+	name := opts.Criteria.Provider
+	selected := s.selectProviders(name)
 	if len(selected) == 0 {
-		return nil, fmt.Errorf("%w %q", ErrUnknownProvider, criteria.Provider)
+		return nil, fmt.Errorf("%w %q (configured: %s)", ErrUnknownProvider, name, strings.Join(s.names(), ", "))
 	}
 
 	var all []lease.Lease
@@ -83,7 +102,7 @@ func (s *Service) ListLeases(ctx context.Context, criteria lease.Criteria) ([]le
 		}
 		all = append(all, leases...)
 	}
-	return lease.Filter(all, criteria), nil
+	return lease.Sort(lease.Filter(all, opts.Criteria), sortBy)
 }
 
 // checkLeases enforces the Provider contract on what a provider returned.
@@ -111,4 +130,13 @@ func (s *Service) selectProviders(name string) []Provider {
 		}
 	}
 	return nil
+}
+
+// names returns the providers' names, in the order they were given to New.
+func (s *Service) names() []string {
+	names := make([]string, 0, len(s.providers))
+	for _, p := range s.providers {
+		names = append(names, p.Name())
+	}
+	return names
 }

@@ -195,7 +195,7 @@ func runList(ctx context.Context, args []string, configPath string, d deps) erro
 	if err != nil {
 		return err
 	}
-	leases, err := svc.ListLeases(ctx, lease.Criteria{Provider: *provider})
+	leases, err := svc.ListLeases(ctx, app.ListOptions{Criteria: lease.Criteria{Provider: *provider}})
 	if err != nil {
 		return err
 	}

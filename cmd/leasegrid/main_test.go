@@ -296,7 +296,7 @@ func TestBuildService(t *testing.T) {
 			if err != nil {
 				t.Fatalf("buildService() error = %v", err)
 			}
-			if _, err := svc.ListLeases(t.Context(), lease.Criteria{}); !errors.Is(err, tt.wantListErr) {
+			if _, err := svc.ListLeases(t.Context(), app.ListOptions{}); !errors.Is(err, tt.wantListErr) {
 				t.Errorf("ListLeases() error = %v, want %v", err, tt.wantListErr)
 			}
 		})
@@ -311,7 +311,7 @@ func TestLoadService(t *testing.T) {
 		if err != nil {
 			t.Fatalf("loadService() error = %v", err)
 		}
-		if _, err := svc.ListLeases(t.Context(), lease.Criteria{}); !errors.Is(err, app.ErrNoProviders) {
+		if _, err := svc.ListLeases(t.Context(), app.ListOptions{}); !errors.Is(err, app.ErrNoProviders) {
 			t.Errorf("ListLeases() error = %v, want %v", err, app.ErrNoProviders)
 		}
 	})

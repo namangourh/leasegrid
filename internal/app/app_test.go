@@ -29,6 +29,9 @@ func TestServiceListLeases(t *testing.T) {
 	api := lease.Lease{ID: "f1", Provider: "flux", Name: "api", Status: lease.StatusActive}
 	job := lease.Lease{ID: "i1", Provider: "inline", Name: "job", Status: lease.StatusActive}
 	old := lease.Lease{ID: "i2", Provider: "inline", Name: "old", Status: lease.StatusClosed}
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	soon := lease.Lease{ID: "s2", Provider: "inline", Name: "soon", Status: lease.StatusActive, Expires: now.Add(time.Hour)}
+	later := lease.Lease{ID: "s1", Provider: "inline", Name: "later", Status: lease.StatusActive, Expires: now.Add(48 * time.Hour)}
 	errDown := errors.New("connection refused")
 
 	akash := &fake.Provider{ProviderName: "akash", Leases: []lease.Lease{web, db}}
@@ -39,6 +42,7 @@ func TestServiceListLeases(t *testing.T) {
 		name      string
 		providers []app.Provider
 		criteria  lease.Criteria
+		sortBy    lease.SortKey
 		want      []lease.Lease
 		wantErr   error
 	}{
@@ -48,7 +52,7 @@ func TestServiceListLeases(t *testing.T) {
 			want:      []lease.Lease{web, db},
 		},
 		{
-			name:      "merges providers in order",
+			name:      "merges every provider's leases",
 			providers: []app.Provider{akash, flux},
 			want:      []lease.Lease{web, db, api},
 		},
@@ -89,6 +93,30 @@ func TestServiceListLeases(t *testing.T) {
 			wantErr: providers.ErrBadResponse,
 		},
 		{
+			name:      "sorts soonest expiry first by default",
+			providers: []app.Provider{inline{leases: []lease.Lease{later, old, soon}}},
+			want:      []lease.Lease{soon, later, old},
+		},
+		{
+			name:      "sorts by the requested key",
+			providers: []app.Provider{inline{leases: []lease.Lease{later, old, soon}}},
+			sortBy:    lease.SortByID,
+			want:      []lease.Lease{old, later, soon},
+		},
+		{
+			name:      "filters on expiry",
+			providers: []app.Provider{inline{leases: []lease.Lease{later, old, soon}}},
+			criteria:  lease.Criteria{ExpiresBefore: now.Add(24 * time.Hour)},
+			want:      []lease.Lease{soon},
+		},
+		{
+			// fluxDown would fail the call if it were queried.
+			name:      "unknown sort key is rejected before any provider is called",
+			providers: []app.Provider{fluxDown},
+			sortBy:    "cost",
+			wantErr:   lease.ErrUnknownSortKey,
+		},
+		{
 			name: "lease from the wrong provider is a bad response",
 			providers: []app.Provider{&fake.Provider{
 				ProviderName: "akash",
@@ -102,7 +130,7 @@ func TestServiceListLeases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := app.New(tt.providers...)
 
-			got, err := svc.ListLeases(t.Context(), tt.criteria)
+			got, err := svc.ListLeases(t.Context(), app.ListOptions{Criteria: tt.criteria, SortBy: tt.sortBy})
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("ListLeases() error = %v, want %v", err, tt.wantErr)
 			}
@@ -136,7 +164,7 @@ func TestServiceErrorMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := app.New(tt.provider).ListLeases(t.Context(), lease.Criteria{})
+			_, err := app.New(tt.provider).ListLeases(t.Context(), app.ListOptions{})
 			if err == nil || err.Error() != tt.want {
 				t.Fatalf("ListLeases() error = %v, want %q", err, tt.want)
 			}
@@ -153,7 +181,7 @@ func TestServiceCancellationReachesProvider(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	errc := make(chan error, 1)
 	go func() {
-		_, err := svc.ListLeases(ctx, lease.Criteria{})
+		_, err := svc.ListLeases(ctx, app.ListOptions{})
 		errc <- err
 	}()
 
@@ -170,5 +198,15 @@ func TestServiceCancellationReachesProvider(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("ListLeases did not return after cancel: ctx never reached the provider")
+	}
+}
+
+func TestServiceUnknownProviderMessage(t *testing.T) {
+	svc := app.New(&fake.Provider{ProviderName: "akash"}, &fake.Provider{ProviderName: "flux"})
+
+	_, err := svc.ListLeases(t.Context(), app.ListOptions{Criteria: lease.Criteria{Provider: "render"}})
+	want := `unknown provider "render" (configured: akash, flux)`
+	if err == nil || err.Error() != want {
+		t.Fatalf("ListLeases() error = %v, want %q", err, want)
 	}
 }
