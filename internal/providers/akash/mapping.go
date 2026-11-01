@@ -11,10 +11,6 @@ import (
 	"github.com/namangourh/leasegrid/internal/providers"
 )
 
-// providerName is this provider's Name and the Provider field of every lease
-// it returns.
-const providerName = "akash"
-
 // converter turns Akash's per-block figures into LeaseGrid's units: money per
 // hour, and wall-clock expiry times.
 type converter struct {
@@ -40,7 +36,7 @@ func (c converter) toLease(l leaseDTO, dep *deploymentResponse, spendPerBlock *b
 		return lease.Lease{}, badResponse("lease %s: price: %v", id, err)
 	}
 
-	out := lease.Lease{ID: id, Provider: providerName, Status: status, Cost: cost}
+	out := lease.Lease{ID: id, Provider: Name, Status: status, Cost: cost}
 	if dep == nil {
 		return out, nil
 	}

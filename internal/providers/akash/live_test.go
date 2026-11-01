@@ -19,7 +19,7 @@ func TestLiveAkash(t *testing.T) {
 	}
 	baseURL := os.Getenv("LEASEGRID_AKASH_LIVE_URL")
 	if baseURL == "" {
-		baseURL = "https://api.akashnet.net"
+		baseURL = DefaultBaseURL
 	}
 
 	p, err := New(Config{BaseURL: baseURL, Owner: owner, Timeout: 60 * time.Second})

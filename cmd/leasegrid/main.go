@@ -15,6 +15,7 @@ import (
 	"github.com/namangourh/leasegrid/internal/config"
 	"github.com/namangourh/leasegrid/internal/lease"
 	"github.com/namangourh/leasegrid/internal/output"
+	"github.com/namangourh/leasegrid/internal/providers/akash"
 	"github.com/namangourh/leasegrid/internal/providers/demo"
 )
 
@@ -119,19 +120,43 @@ func loadConfig(configPath string) (config.Config, error) {
 }
 
 // buildService turns configuration into an application service, giving
-// providers now as their clock. It is the only code that knows concrete
-// provider implementations: the program's composition root. Only the demo
-// providers exist so far; the Akash slice adds the first real one here.
+// providers now as their clock. With newProvider, it is the only code that
+// knows concrete provider implementations: the program's composition root.
 func buildService(cfg config.Config, now func() time.Time) (*app.Service, error) {
 	var ps []app.Provider
-	for _, name := range cfg.EnabledProviders() {
-		p, ok := demo.New(name, now)
-		if !ok {
-			return nil, fmt.Errorf("provider %q is not implemented yet (available: %s, %s)", name, demo.NameA, demo.NameB)
+	for _, pc := range cfg.EnabledProviders() {
+		p, err := newProvider(pc, now)
+		if err != nil {
+			return nil, err
 		}
 		ps = append(ps, p)
 	}
 	return app.New(ps...), nil
+}
+
+// newProvider builds the provider that a config entry names. Building one
+// makes no network calls. A setting the provider doesn't use is an error, so
+// an owner put on the wrong entry fails loudly instead of being ignored.
+func newProvider(pc config.ProviderConfig, now func() time.Time) (app.Provider, error) {
+	if pc.Name == akash.Name {
+		p, err := akash.New(akash.Config{BaseURL: pc.Endpoint, Owner: pc.Owner, Now: now})
+		if err != nil {
+			return nil, err
+		}
+		return p, nil
+	}
+
+	p, ok := demo.New(pc.Name, now)
+	if !ok {
+		return nil, fmt.Errorf("unknown provider %q (available: %s, %s, %s)", pc.Name, akash.Name, demo.NameA, demo.NameB)
+	}
+	if pc.Owner != "" {
+		return nil, fmt.Errorf("provider %q does not take an owner", pc.Name)
+	}
+	if pc.Endpoint != "" {
+		return nil, fmt.Errorf("provider %q does not take an endpoint", pc.Name)
+	}
+	return p, nil
 }
 
 // run executes the CLI. It never calls os.Exit, so tests can call it

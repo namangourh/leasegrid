@@ -5,6 +5,7 @@
 //	providers:
 //	  - name: akash
 //	    enabled: true
+//	    owner: akash1...
 //
 // The package only reads, parses and validates. Which providers exist, and
 // how errors are shown to the user, is decided by the caller.
@@ -30,6 +31,14 @@ type ProviderConfig struct {
 
 	// Enabled turns the provider on. When omitted, it is false.
 	Enabled bool `yaml:"enabled"`
+
+	// Owner is the wallet address whose leases are listed, for providers
+	// that need one, such as akash. It is public, not a credential.
+	Owner string `yaml:"owner"`
+
+	// Endpoint is the provider's API base URL, for providers that call one.
+	// Empty means the provider's default.
+	Endpoint string `yaml:"endpoint"`
 }
 
 // Default returns the configuration used when no file exists: no providers.
@@ -37,15 +46,15 @@ func Default() Config {
 	return Config{}
 }
 
-// EnabledProviders returns the names of the enabled providers, in file order.
-func (c Config) EnabledProviders() []string {
-	var names []string
+// EnabledProviders returns the enabled providers' entries, in file order.
+func (c Config) EnabledProviders() []ProviderConfig {
+	var enabled []ProviderConfig
 	for _, p := range c.Providers {
 		if p.Enabled {
-			names = append(names, p.Name)
+			enabled = append(enabled, p)
 		}
 	}
-	return names
+	return enabled
 }
 
 // ErrInvalid matches every error caused by a configuration file's contents:

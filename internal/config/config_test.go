@@ -17,7 +17,7 @@ func TestEnabledProviders(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  config.Config
-		want []string
+		want []config.ProviderConfig
 	}{
 		{name: "no providers", cfg: config.Config{}, want: nil},
 		{
@@ -27,7 +27,10 @@ func TestEnabledProviders(t *testing.T) {
 				{Name: "flux", Enabled: false},
 				{Name: "render", Enabled: true},
 			}},
-			want: []string{"akash", "render"},
+			want: []config.ProviderConfig{
+				{Name: "akash", Enabled: true},
+				{Name: "render", Enabled: true},
+			},
 		},
 		{
 			name: "all disabled",

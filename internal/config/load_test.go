@@ -69,6 +69,19 @@ func TestLoad(t *testing.T) {
 			want: []config.ProviderConfig{akash, flux},
 		},
 		{
+			name: "owner and endpoint",
+			content: lines(
+				"providers:",
+				"  - name: akash",
+				"    enabled: true",
+				"    owner: akash1abc",
+				"    endpoint: https://akash.example.com",
+			),
+			want: []config.ProviderConfig{
+				{Name: "akash", Enabled: true, Owner: "akash1abc", Endpoint: "https://akash.example.com"},
+			},
+		},
+		{
 			name:    "malformed yaml",
 			content: lines("providers: ["),
 			wantErr: config.ErrInvalid,

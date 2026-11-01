@@ -168,6 +168,16 @@ func TestListLeasesStopsAtPageLimit(t *testing.T) {
 	}
 }
 
+func TestNewDefaultsBaseURL(t *testing.T) {
+	p, err := New(Config{Owner: testOwner})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := p.baseURL.String(); got != DefaultBaseURL {
+		t.Errorf("base URL = %q, want %q", got, DefaultBaseURL)
+	}
+}
+
 func TestNew(t *testing.T) {
 	tests := []struct {
 		name    string

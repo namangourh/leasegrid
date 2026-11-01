@@ -20,8 +20,13 @@ import (
 	"github.com/namangourh/leasegrid/internal/lease"
 )
 
+// Name is the provider's name, both in configuration and in the Provider
+// field of every lease it returns.
+const Name = "akash"
+
 // Defaults for Config fields left at zero.
 const (
+	DefaultBaseURL   = "https://api.akashnet.net" // Akash's public mainnet API
 	DefaultTimeout   = 30 * time.Second
 	DefaultBlockTime = 6 * time.Second
 )
@@ -46,10 +51,10 @@ const (
 // pages through.
 var ErrTooManyPages = errors.New("too many pages of leases")
 
-// Config configures a Provider. Only BaseURL and Owner are required.
+// Config configures a Provider. Only Owner is required.
 type Config struct {
-	// BaseURL is the REST endpoint, e.g. "https://api.akashnet.net".
-	// It must use https.
+	// BaseURL is the REST endpoint. It must use https. Empty means
+	// DefaultBaseURL.
 	BaseURL string
 
 	// Owner is the wallet address whose leases are listed, e.g. "akash1...".
@@ -92,6 +97,9 @@ func New(cfg Config) (*Provider, error) {
 	if !strings.HasPrefix(cfg.Owner, "akash1") {
 		return nil, errors.New("akash: owner must be an akash1... wallet address")
 	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = DefaultBaseURL
+	}
 	u, err := url.Parse(cfg.BaseURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return nil, errors.New("akash: base URL must be an https URL with a host")
@@ -126,7 +134,7 @@ func New(cfg Config) (*Provider, error) {
 }
 
 // Name returns "akash".
-func (p *Provider) Name() string { return providerName }
+func (p *Provider) Name() string { return Name }
 
 // ListLeases returns all of the owner's leases, in the order Akash lists
 // them. Closed leases have no name, resources or expiry: fetching their

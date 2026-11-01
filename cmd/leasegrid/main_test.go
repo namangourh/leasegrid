@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +25,7 @@ import (
 	"github.com/namangourh/leasegrid/internal/app"
 	"github.com/namangourh/leasegrid/internal/config"
 	"github.com/namangourh/leasegrid/internal/lease"
+	"github.com/namangourh/leasegrid/internal/providers"
 	"github.com/namangourh/leasegrid/internal/providers/fake"
 )
 
@@ -459,9 +463,9 @@ func TestBuildService(t *testing.T) {
 			wantListErr: app.ErrNoProviders,
 		},
 		{
-			name:    "enabled provider not implemented",
-			cfg:     config.Config{Providers: []config.ProviderConfig{{Name: "akash", Enabled: true}}},
-			wantErr: `provider "akash" is not implemented yet (available: demo-a, demo-b)`,
+			name:    "unknown provider",
+			cfg:     config.Config{Providers: []config.ProviderConfig{{Name: "flux", Enabled: true}}},
+			wantErr: `unknown provider "flux" (available: akash, demo-a, demo-b)`,
 		},
 		{
 			name: "demo providers",
@@ -491,6 +495,117 @@ func TestBuildService(t *testing.T) {
 	}
 }
 
+// TestNewProvider checks how each config entry becomes a provider. None of
+// these cases makes a network call: building a provider never does.
+func TestNewProvider(t *testing.T) {
+	const owner = "akash1testowner0000000000000000000000000000"
+	tests := []struct {
+		name     string
+		pc       config.ProviderConfig
+		wantName string // the built provider's Name, when no error is expected
+		wantErr  string // substring of the error; empty means success
+	}{
+		{
+			name:     "akash with an owner",
+			pc:       config.ProviderConfig{Name: "akash", Owner: owner},
+			wantName: "akash",
+		},
+		{
+			name:     "akash with an owner and an endpoint",
+			pc:       config.ProviderConfig{Name: "akash", Owner: owner, Endpoint: "https://akash.example.com"},
+			wantName: "akash",
+		},
+		{
+			name:    "akash without an owner",
+			pc:      config.ProviderConfig{Name: "akash"},
+			wantErr: "akash: owner must be an akash1... wallet address",
+		},
+		{
+			name:    "akash with a plain http endpoint",
+			pc:      config.ProviderConfig{Name: "akash", Owner: owner, Endpoint: "http://akash.example.com"},
+			wantErr: "akash: base URL must be an https URL",
+		},
+		{
+			name:     "demo provider",
+			pc:       config.ProviderConfig{Name: "demo-a"},
+			wantName: "demo-a",
+		},
+		{
+			name:    "demo provider with an owner",
+			pc:      config.ProviderConfig{Name: "demo-a", Owner: owner},
+			wantErr: `provider "demo-a" does not take an owner`,
+		},
+		{
+			name:    "demo provider with an endpoint",
+			pc:      config.ProviderConfig{Name: "demo-b", Endpoint: "https://akash.example.com"},
+			wantErr: `provider "demo-b" does not take an endpoint`,
+		},
+		{
+			name:    "unknown provider",
+			pc:      config.ProviderConfig{Name: "flux"},
+			wantErr: `unknown provider "flux" (available: akash, demo-a, demo-b)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := newProvider(tt.pc, testClock)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("newProvider() error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				if p != nil {
+					t.Errorf("newProvider() = %#v, want nil along with the error", p)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("newProvider() error = %v", err)
+			}
+			if got := p.Name(); got != tt.wantName {
+				t.Errorf("Name() = %q, want %q", got, tt.wantName)
+			}
+		})
+	}
+}
+
+// TestListAkashFailureHidesSettings runs list against an Akash endpoint that
+// fails, and checks that neither the endpoint nor the owner address appears
+// in the output. The test server's certificate isn't trusted, so the request
+// fails during the TLS handshake and nothing leaves the machine.
+func TestListAkashFailureHidesSettings(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0) // the failed handshake is expected
+	srv.StartTLS()
+	defer srv.Close()
+
+	const owner = "akash1testowner0000000000000000000000000000"
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := "providers:\n  - name: akash\n    enabled: true\n    owner: " + owner + "\n    endpoint: " + srv.URL + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	d := deps{stdout: &stdout, stderr: &stderr, now: testClock, newService: loadService}
+	err := run(t.Context(), []string{"--config", path, "list"}, d)
+	if !errors.Is(err, providers.ErrUnavailable) {
+		t.Fatalf("run() error = %v, want %v", err, providers.ErrUnavailable)
+	}
+	if code := exitCode(err); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty on error", stdout.String())
+	}
+	seen := stderr.String() + err.Error()
+	for _, private := range []string{owner, srv.Listener.Addr().String()} {
+		if strings.Contains(seen, private) {
+			t.Errorf("output contains %q:\n%s", private, seen)
+		}
+	}
+}
+
 // TestLoadService checks the default-location wiring main uses.
 func TestLoadService(t *testing.T) {
 	t.Run("no file at the default location", func(t *testing.T) {
@@ -513,14 +628,14 @@ func TestLoadService(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatalf("create config dir: %v", err)
 		}
-		content := "providers:\n  - name: akash\n    enabled: true\n"
+		content := "providers:\n  - name: flux\n    enabled: true\n"
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
 
 		_, err = loadService("", testClock)
-		if err == nil || !strings.Contains(err.Error(), `provider "akash" is not implemented yet`) {
-			t.Fatalf("loadService() error = %v, want provider not implemented", err)
+		if err == nil || !strings.Contains(err.Error(), `unknown provider "flux"`) {
+			t.Fatalf("loadService() error = %v, want unknown provider", err)
 		}
 	})
 
@@ -531,8 +646,8 @@ func TestLoadService(t *testing.T) {
 			t.Fatalf("write config: %v", err)
 		}
 		_, err := loadService(path, testClock)
-		if err == nil || !strings.Contains(err.Error(), `provider "flux" is not implemented yet`) {
-			t.Fatalf("loadService() error = %v, want provider not implemented", err)
+		if err == nil || !strings.Contains(err.Error(), `unknown provider "flux"`) {
+			t.Fatalf("loadService() error = %v, want unknown provider", err)
 		}
 	})
 
@@ -645,11 +760,18 @@ func TestConfigFlag(t *testing.T) {
 		wantStdout string
 	}{
 		{
-			name:     "enabled provider is not implemented yet",
+			name:     "unknown provider",
+			content:  "providers:\n  - name: flux\n    enabled: true\n",
+			args:     []string{"--config", "CONFIG", "list"},
+			wantCode: 1,
+			wantMsg:  `unknown provider "flux"`,
+		},
+		{
+			name:     "akash without an owner",
 			content:  "providers:\n  - name: akash\n    enabled: true\n",
 			args:     []string{"--config", "CONFIG", "list"},
 			wantCode: 1,
-			wantMsg:  `provider "akash" is not implemented yet`,
+			wantMsg:  "akash: owner must be an akash1... wallet address",
 		},
 		{
 			name:     "only disabled providers",
@@ -757,7 +879,7 @@ func TestBinaryConfig(t *testing.T) {
 		}
 		return path
 	}
-	valid := write("valid.yaml", "providers:\n  - name: akash\n    enabled: true\n")
+	valid := write("valid.yaml", "providers:\n  - name: flux\n    enabled: true\n")
 	malformed := write("malformed.yaml", "providers: [\n")
 	missing := filepath.Join(dir, "missing.yaml")
 
@@ -767,7 +889,7 @@ func TestBinaryConfig(t *testing.T) {
 		wantCode int
 		wantOut  string
 	}{
-		{name: "valid file", args: []string{"--config", valid, "list"}, wantCode: 1, wantOut: `leasegrid: provider "akash" is not implemented yet`},
+		{name: "valid file", args: []string{"--config", valid, "list"}, wantCode: 1, wantOut: `leasegrid: unknown provider "flux"`},
 		{name: "malformed file", args: []string{"--config", malformed, "list"}, wantCode: 1, wantOut: "invalid configuration"},
 		{name: "missing file", args: []string{"--config", missing, "list"}, wantCode: 1, wantOut: "leasegrid: read config"},
 		{name: "version ignores config", args: []string{"--config", missing, "--version"}, wantCode: 0, wantOut: "leasegrid 0.1.0"},
