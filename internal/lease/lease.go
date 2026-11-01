@@ -12,14 +12,17 @@ import (
 // Lease is one compute lease, normalized from any provider's own format.
 // Provider-specific details (raw IDs, per-block prices, chain heights) stay
 // inside each provider's adapter.
+//
+// JSON and YAML output use the same field names. A test fails if the json
+// and yaml tags of any field ever disagree.
 type Lease struct {
-	ID        string    `json:"id"`
-	Provider  string    `json:"provider"` // provider name, e.g. "akash"
-	Name      string    `json:"name"`
-	Status    Status    `json:"status"`
-	Expires   time.Time `json:"expires,omitzero"` // estimated; zero means unknown
-	Cost      Cost      `json:"cost,omitzero"`
-	Resources Resources `json:"resources,omitzero"`
+	ID        string    `json:"id" yaml:"id"`
+	Provider  string    `json:"provider" yaml:"provider"` // provider name, e.g. "akash"
+	Name      string    `json:"name" yaml:"name"`
+	Status    Status    `json:"status" yaml:"status"`
+	Expires   time.Time `json:"expires,omitzero" yaml:"expires,omitempty"` // estimated; zero means unknown
+	Cost      Cost      `json:"cost,omitzero" yaml:"cost,omitempty"`
+	Resources Resources `json:"resources,omitzero" yaml:"resources,omitempty"`
 }
 
 // Status is a lease's lifecycle state.
@@ -55,16 +58,16 @@ func ParseStatus(s string) (Status, error) {
 // denomination's smallest unit (1 AKT = 1,000,000 uakt). Integers keep sums
 // exact; convert to whole units only for display.
 type Cost struct {
-	PerHour int64  `json:"per_hour"`
-	Denom   string `json:"denom"` // e.g. "uakt"
+	PerHour int64  `json:"per_hour" yaml:"per_hour"`
+	Denom   string `json:"denom" yaml:"denom"` // e.g. "uakt"
 }
 
 // Resources is the compute capacity a lease provides.
 type Resources struct {
-	CPUMillis    int64 `json:"cpu_millis"` // 1000 = one CPU
-	MemoryBytes  int64 `json:"memory_bytes"`
-	StorageBytes int64 `json:"storage_bytes"`
-	GPUs         int64 `json:"gpus"`
+	CPUMillis    int64 `json:"cpu_millis" yaml:"cpu_millis"` // 1000 = one CPU
+	MemoryBytes  int64 `json:"memory_bytes" yaml:"memory_bytes"`
+	StorageBytes int64 `json:"storage_bytes" yaml:"storage_bytes"`
+	GPUs         int64 `json:"gpus" yaml:"gpus"`
 }
 
 // Validation errors. Validate wraps exactly one of them, so callers can check

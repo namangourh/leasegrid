@@ -19,7 +19,8 @@ func TestParseFormat(t *testing.T) {
 		wantErr error
 	}{
 		{in: "json", want: output.FormatJSON},
-		{in: "yaml", wantErr: output.ErrUnknownFormat},
+		{in: "yaml", want: output.FormatYAML},
+		{in: "csv", wantErr: output.ErrUnknownFormat},
 		{in: "table", want: output.FormatTable},
 		{in: "JSON", wantErr: output.ErrUnknownFormat}, // names are case-sensitive
 		{in: "", wantErr: output.ErrUnknownFormat},
@@ -108,7 +109,7 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errWrite }
 
 func TestWriteReturnsWriterError(t *testing.T) {
 	leases := []lease.Lease{{ID: "a1", Provider: "akash", Name: "web", Status: lease.StatusActive}}
-	for _, f := range []output.Format{output.FormatTable, output.FormatJSON} {
+	for _, f := range []output.Format{output.FormatTable, output.FormatJSON, output.FormatYAML} {
 		t.Run(string(f), func(t *testing.T) {
 			err := output.Write(failingWriter{}, f, time.Time{}, leases)
 			if !errors.Is(err, errWrite) {
@@ -120,7 +121,7 @@ func TestWriteReturnsWriterError(t *testing.T) {
 
 func TestWriteUnknownFormat(t *testing.T) {
 	var buf bytes.Buffer
-	err := output.Write(&buf, output.Format("yaml"), time.Time{}, nil)
+	err := output.Write(&buf, output.Format("csv"), time.Time{}, nil)
 	if !errors.Is(err, output.ErrUnknownFormat) {
 		t.Fatalf("Write() error = %v, want %v", err, output.ErrUnknownFormat)
 	}

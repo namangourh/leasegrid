@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/namangourh/leasegrid/internal/app"
 	"github.com/namangourh/leasegrid/internal/config"
 	"github.com/namangourh/leasegrid/internal/lease"
@@ -271,8 +273,9 @@ func TestListDemoTable(t *testing.T) {
 }
 
 // TestListDemo checks which leases each combination of flags selects, and in
-// what order, through real config loading and the demo providers. Every demo
-// lease has a different name, so the list of names identifies the result.
+// what order, in JSON and YAML, through real config loading and the demo
+// providers. Every demo lease has a different name, so the list of names
+// identifies the result.
 func TestListDemo(t *testing.T) {
 	tests := []struct {
 		name string
@@ -292,29 +295,41 @@ func TestListDemo(t *testing.T) {
 		{name: "sort by status in lifecycle order", args: []string{"--sort-by", "status"}, want: []string{"web", "api", "gpu", "worker", "batch"}},
 	}
 
+	// JSON and YAML must select and order leases the same way. Both packages'
+	// Unmarshal functions have the same signature, so either fits the field.
+	formats := []struct {
+		name      string
+		unmarshal func([]byte, any) error
+	}{
+		{name: "json", unmarshal: json.Unmarshal},
+		{name: "yaml", unmarshal: yaml.Unmarshal},
+	}
+
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			stdout, stderr, err := runDemo(t, append([]string{"list", "--format", "json"}, tt.args...)...)
-			if err != nil {
-				t.Fatalf("run() error = %v\nstderr: %s", err, stderr)
-			}
-			var leases []lease.Lease
-			if err := json.Unmarshal([]byte(stdout), &leases); err != nil {
-				t.Fatalf("stdout is not valid JSON: %v\nstdout: %q", err, stdout)
-			}
-			var got []string
-			for _, l := range leases {
-				got = append(got, l.Name)
-			}
-			if !slices.Equal(got, tt.want) {
-				t.Errorf("lease names = %v, want %v", got, tt.want)
-			}
-		})
+		for _, f := range formats {
+			t.Run(tt.name+"/"+f.name, func(t *testing.T) {
+				stdout, stderr, err := runDemo(t, append([]string{"list", "--format", f.name}, tt.args...)...)
+				if err != nil {
+					t.Fatalf("run() error = %v\nstderr: %s", err, stderr)
+				}
+				var leases []lease.Lease
+				if err := f.unmarshal([]byte(stdout), &leases); err != nil {
+					t.Fatalf("stdout is not valid %s: %v\nstdout: %q", f.name, err, stdout)
+				}
+				var got []string
+				for _, l := range leases {
+					got = append(got, l.Name)
+				}
+				if !slices.Equal(got, tt.want) {
+					t.Errorf("lease names = %v, want %v", got, tt.want)
+				}
+			})
+		}
 	}
 }
 
 // TestListEmpty checks that an empty result keeps stdout for data: the table
-// prints nothing there and says so on stderr, while JSON prints [].
+// prints nothing there and says so on stderr, while JSON and YAML print [].
 func TestListEmpty(t *testing.T) {
 	tests := []struct {
 		format     string
@@ -323,6 +338,7 @@ func TestListEmpty(t *testing.T) {
 	}{
 		{format: "table", wantStdout: "", wantStderr: "No leases found.\n"},
 		{format: "json", wantStdout: "[]\n", wantStderr: ""},
+		{format: "yaml", wantStdout: "[]\n", wantStderr: ""},
 	}
 
 	for _, tt := range tests {
@@ -350,7 +366,7 @@ func TestListInvalidFlags(t *testing.T) {
 		args    []string
 		wantMsg string // must appear in stderr
 	}{
-		{name: "unknown format", args: []string{"--format", "yaml"}, wantMsg: `invalid value "yaml" for flag -format: unknown output format "yaml"`},
+		{name: "unknown format", args: []string{"--format", "csv"}, wantMsg: `invalid value "csv" for flag -format: unknown output format "csv"`},
 		{name: "expiring is not a status", args: []string{"--status", "expiring"}, wantMsg: `invalid value "expiring" for flag -status: unsupported status "expiring"`},
 		{name: "cost is not a sort key", args: []string{"--sort-by", "cost"}, wantMsg: `invalid value "cost" for flag -sort-by: unknown sort key "cost"`},
 		{name: "days are not a duration unit", args: []string{"--expiring-within", "3d"}, wantMsg: "not a duration such as 90m or 24h"},

@@ -20,6 +20,7 @@ type Format string
 const (
 	FormatTable Format = "table"
 	FormatJSON  Format = "json"
+	FormatYAML  Format = "yaml"
 )
 
 // ErrUnknownFormat is returned for a format name LeaseGrid doesn't support.
@@ -38,6 +39,8 @@ func New(f Format, now time.Time) (Formatter, error) {
 		return Table{Now: now}, nil
 	case FormatJSON:
 		return JSON{}, nil
+	case FormatYAML:
+		return YAML{}, nil
 	default:
 		return nil, fmt.Errorf("%w %q", ErrUnknownFormat, f)
 	}
@@ -47,7 +50,7 @@ func New(f Format, now time.Time) (Formatter, error) {
 func ParseFormat(s string) (Format, error) {
 	f := Format(s)
 	if _, err := New(f, time.Time{}); err != nil {
-		return "", fmt.Errorf("%w (supported: table, json)", err)
+		return "", fmt.Errorf("%w (supported: table, json, yaml)", err)
 	}
 	return f, nil
 }

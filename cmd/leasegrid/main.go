@@ -189,7 +189,7 @@ func runList(ctx context.Context, args []string, configPath string, d deps) erro
 	fs.SetOutput(d.stderr)
 
 	format := output.FormatTable
-	fs.Func("format", "output `format`: table or json (default table)", func(s string) error {
+	fs.Func("format", "output `format`: table, json or yaml (default table)", func(s string) error {
 		f, err := output.ParseFormat(s)
 		if err != nil {
 			return err
