@@ -29,6 +29,10 @@ type Status struct {
 
 	// Leases are the leases the summary describes, in display order.
 	Leases []lease.Lease
+
+	// Color says whether the text view may color the table's STATUS and
+	// EXPIRES columns. The zero value is ColorAuto. JSON ignores it.
+	Color ColorMode
 }
 
 // ParseStatusFormat converts the status command's --format flag value into a
@@ -98,7 +102,8 @@ func statusText(w io.Writer, st Status) error {
 		buf.WriteString("No leases found.\n")
 	} else {
 		// Writes to a bytes.Buffer never fail, so the error is always nil.
-		_ = Table{Now: st.Now}.Render(&buf, st.Leases)
+		table := Table{Now: st.Now, color: st.Color.enabled(w), window: st.Window}
+		_ = table.Render(&buf, st.Leases)
 	}
 
 	_, err := w.Write(buf.Bytes())

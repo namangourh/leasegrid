@@ -175,6 +175,28 @@ func TestCalculate(t *testing.T) {
 	}
 }
 
+func TestExpiringSoon(t *testing.T) {
+	// Calculate asks only about active leases, so the status rule is
+	// checked here, for other callers such as the table's colors.
+	tests := []struct {
+		l    lease.Lease
+		want bool
+	}{
+		{l: expiring(active("in 1h"), time.Hour), want: true},
+		{l: expiring(closed("closed"), time.Hour), want: false},
+		{l: expiring(stopped("stopped"), time.Hour), want: false},
+		{l: expiring(active("expired"), -time.Hour), want: false},
+		{l: expiring(active("after the window"), 25*time.Hour), want: false},
+		{l: active("unknown expiry"), want: false},
+	}
+
+	for _, tt := range tests {
+		if got := summary.ExpiringSoon(tt.l, now, 24*time.Hour); got != tt.want {
+			t.Errorf("ExpiringSoon(%q) = %v, want %v", tt.l.ID, got, tt.want)
+		}
+	}
+}
+
 func TestCalculateOverflow(t *testing.T) {
 	leases := []lease.Lease{
 		costing(active("1"), math.MaxInt64, "uakt"),

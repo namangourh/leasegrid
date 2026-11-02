@@ -41,6 +41,13 @@ type Summary struct {
 	SpendPerHour []lease.Cost
 }
 
+// ExpiringSoon reports whether l counts as expiring soon: it is active, and
+// its known expiry is after now and before now plus window. The dashboard's
+// count and its colors both use it, so they always agree.
+func ExpiringSoon(l lease.Lease, now time.Time, window time.Duration) bool {
+	return l.Status == lease.StatusActive && l.ExpiresWithin(now, window) && l.Expires.After(now)
+}
+
 // Calculate summarizes leases as of now, counting leases that expire within
 // window as expiring soon. It expects leases that pass lease.Validate, so
 // costs are never negative.
@@ -65,7 +72,7 @@ func Calculate(leases []lease.Lease, now time.Time, window time.Duration) (Summa
 			continue
 		}
 
-		if l.ExpiresWithin(now, window) && l.Expires.After(now) {
+		if ExpiringSoon(l, now, window) {
 			s.ExpiringSoon++
 		}
 		if c := l.Cost; c.Denom != "" { // no denom means no cost data

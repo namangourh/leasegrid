@@ -18,10 +18,12 @@ type Table struct {
 	// Now is the time the EXPIRES column is relative to. Callers pass it in,
 	// so tests can fix it and get the same output on every run.
 	Now time.Time
-}
 
-// tableHeader names the columns, separated by tabs for tabwriter.
-const tableHeader = "ID\tPROVIDER\tNAME\tSTATUS\tEXPIRES\tCOST/HOUR"
+	// color turns on colored STATUS and EXPIRES columns, and window is the
+	// "expiring soon" window for EXPIRES. Only the status dashboard sets them.
+	color  bool
+	window time.Duration
+}
 
 // Render writes one header line and one line per lease. An empty list writes
 // nothing at all: the caller decides how to tell the user.
@@ -37,14 +39,15 @@ func (t Table) Render(w io.Writer, leases []lease.Lease) error {
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 	// tw writes only to buf, and writes to a bytes.Buffer never fail, so the
 	// errors below are always nil.
-	_, _ = fmt.Fprintln(tw, tableHeader)
+	header := []string{"ID", "PROVIDER", "NAME", t.paint(ansiDefault, "STATUS"), t.paint(ansiDefault, "EXPIRES"), "COST/HOUR"}
+	_, _ = fmt.Fprintln(tw, strings.Join(header, "\t"))
 	for _, l := range leases {
 		row := []string{
 			cell(l.ID),
 			cell(l.Provider),
 			cell(l.Name),
-			cell(string(l.Status)),
-			expires(l.Expires, t.Now),
+			t.paint(statusColor(l.Status), cell(string(l.Status))),
+			t.paint(expiryColor(l, t.Now, t.window), expires(l.Expires, t.Now)),
 			cell(cost(l.Cost)),
 		}
 		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t"))
@@ -53,6 +56,15 @@ func (t Table) Render(w io.Writer, leases []lease.Lease) error {
 
 	_, err := w.Write(buf.Bytes())
 	return err
+}
+
+// paint wraps s in the color code and a reset when the table is colored, and
+// returns s unchanged when it isn't.
+func (t Table) paint(code, s string) string {
+	if !t.color {
+		return s
+	}
+	return code + s + ansiReset
 }
 
 // cell prepares provider-supplied text for a table cell. An empty value
