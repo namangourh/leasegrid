@@ -154,7 +154,8 @@ never needs a private key.
 Akash leases have no fixed end date: they run until the deployment's escrow
 account runs out. LeaseGrid estimates EXPIRES from the escrow balance, the
 lease prices and an average block time of 6 seconds, so treat it as an
-estimate.
+estimate. [docs/akash-adapter.md](docs/akash-adapter.md) describes exactly
+what LeaseGrid reads from Akash and how each failure is reported.
 
 ## Usage
 

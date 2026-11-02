@@ -165,6 +165,91 @@ from a clone at `2052699`, with
 - **Not implemented:** charts, converting between denoms, and YAML output for
   `status`.
 
+## Akash adapter failure contract
+
+Hardened and documented on 2026-11-02 in three commits. The contract itself is
+in [akash-adapter.md](akash-adapter.md).
+
+| Commit | Change | CI run |
+|---|---|---|
+| `fd91399` | Leases must belong to the configured owner and name a provider | [41448704189](https://github.com/namangourh/leasegrid/actions/runs/41448704189) ✅ |
+| `79eaf41` | Tests: owner URL escaping, per-hour cost overflow, a context cancelled before the request | [41448974467](https://github.com/namangourh/leasegrid/actions/runs/41448974467) ✅ |
+| `9d414f4` | `TestAkashFailureContract`: eight failure cases end to end | [41449220762](https://github.com/namangourh/leasegrid/actions/runs/41449220762) ✅ |
+
+Run 41449220762 passed every step: tidy, formatting, vet, tests with the race
+detector, build and lint.
+
+### Automated checks at `9d414f4`
+
+| Check | Result |
+|---|---|
+| `go mod tidy -diff` | no diff |
+| `gofmt -l .` | no files |
+| `go vet ./...` | clean |
+| `go build ./...` | ok |
+| golangci-lint v2.14.0 | 0 issues |
+| `go test ./... -count=1` | all packages pass; 468 passing tests and subtests, 0 failing (451 before) |
+| `go test ./... -count=20` | all packages pass |
+| Coverage, `internal/providers/akash` | 94.6% (94.0% before; the overflow branch is now covered) |
+| Coverage, `cmd/leasegrid` | 96.8% |
+
+### Failure-contract matrix
+
+All eight rows of `TestAkashFailureContract` pass. Each one checks the error
+category with `errors.Is`, the exit code, the exact message, an empty stdout,
+and that no output contains the response body, the owner address, the query
+string or the server address.
+
+| # | Case | Exit | Observed message (after `leasegrid: `) |
+|---|---|---|---|
+| 1 | Unknown lease state | 1 | `provider akash: bad response: lease 1001/1/1: unsupported state "pending"` |
+| 2 | HTTP 429 | 1 | `provider akash: rate limited: lease list returned HTTP 429` |
+| 3 | Malformed JSON | 1 | `provider akash: bad response: lease list: invalid JSON: unexpected end of JSON input` |
+| 4 | Cancelled before the request | 130 | `provider akash: lease list: context canceled` |
+| 5 | Cancelled during a slow request | 130 | `provider akash: lease list: context canceled` |
+| 6 | HTTP 500 with secrets in the body | 1 | `provider akash: provider unavailable: lease list returned HTTP 500` |
+| 7 | Owner that needs URL escaping | 0 | (success: the owner arrived intact) |
+| 8 | Per-hour cost beyond int64 | 1 | `provider akash: bad response: lease 1001/1/1: price: amount out of range` |
+
+Two more examples, captured through `leasegrid list` against a local TLS server
+at the same code:
+
+```text
+HTTP 401:               exit 1  leasegrid: provider akash: access denied: lease list returned HTTP 401
+200 ms timeout reached: exit 1  leasegrid: provider akash: lease list: context deadline exceeded
+```
+
+The 401 response body held `SECRET-MARKER token=abc123`; neither appears.
+
+### Deliberate-bug checks
+
+| Part | Bugs planted | Caught |
+|---|---|---|
+| Owner and provider validation | 6 | 6 |
+| Adapter gap tests | 5 | 5 |
+| End-to-end matrix | 6 | 6 |
+
+Among them: the owner not checked, the owner printed in an error, validation
+skipped before deployment requests, the query left unescaped, the cost
+overflow ignored, the request built without its context, 429 classified as
+unavailable, the request URL or the response body put into an error, and
+cancellation exiting 1. Every bug in the third part was caught by
+`TestAkashFailureContract` itself.
+
+### Findings and limits
+
+- **`akash.ErrTooManyPages`** doesn't match any shared `providers` category,
+  unlike every other failure. It was found while reviewing the error layers
+  and is recorded as a known gap; it exits 1 and is tested.
+- **No live Akash call** was made: the adapter is checked against recorded,
+  sanitized responses only.
+- **The binary can't be pointed at the fixtures:** it needs an HTTPS endpoint
+  with a trusted certificate. The fixture-backed `list` and `show` paths
+  (found, not found and failing) run in-process against a local TLS server
+  instead (`TestShowAkash`, `TestShowAkashNotFound`, `TestStatusAkash` and the
+  failure tests).
+- **The race detector** runs in CI only.
+
 ## Earlier features
 
 Their evidence is in the commit history and CI:

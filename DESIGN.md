@@ -253,6 +253,10 @@ No credentials are involved, because lease data on Akash is public.
   `pagination.next_key` for at most 20 pages of 100, then
   `GET /akash/deployment/v1beta4/deployments/info` once per open deployment.
   Closed leases don't trigger deployment requests.
+- **Validation:** every lease record must belong to the configured owner,
+  name a provider, and have a valid ID, state (`active`, `insufficient_funds`
+  or `closed`; anything else is a bad response) and price, before any
+  deployment is requested.
 - **Mapping:** the ID is `dseq/gseq/oseq`, and the name is the deployment's
   placement group name. Per-block prices become per-hour costs with exact
   `math/big` arithmetic (6-second blocks). Expiry is estimated from the
@@ -265,7 +269,12 @@ No credentials are involved, because lease data on Akash is public.
   a secret marker, and for a request cancelled mid-flight.
 - **Tests** run against sanitized fixtures in `testdata/`, served by a local
   `httptest` TLS server. No test touches the network unless you opt in to the
-  live test in `live_test.go`.
+  live test in `live_test.go`. `TestAkashFailureContract` runs eight failure
+  cases end to end through the CLI.
+
+The full contract, including response shapes, validation rules, HTTP
+classification and the failure matrix, is in
+[docs/akash-adapter.md](docs/akash-adapter.md).
 
 ## Demo Providers
 
