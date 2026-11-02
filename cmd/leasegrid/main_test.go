@@ -109,8 +109,8 @@ func TestRun(t *testing.T) {
 		wantStdout string // exact match
 		wantStderr string // substring; empty means stderr must be empty
 	}{
-		{name: "version flag", args: []string{"-version"}, wantStdout: "leasegrid 0.1.0\n"},
-		{name: "double-dash version flag", args: []string{"--version"}, wantStdout: "leasegrid 0.1.0\n"},
+		{name: "version flag", args: []string{"-version"}, wantStdout: "leasegrid 1.0.0\n"},
+		{name: "double-dash version flag", args: []string{"--version"}, wantStdout: "leasegrid 1.0.0\n"},
 		{name: "help flag", args: []string{"--help"}, wantStderr: "LeaseGrid manages compute leases"},
 		{name: "unknown flag", args: []string{"--bogus"}, wantErr: errUsage, wantStderr: "flag provided but not defined: -bogus"},
 		{name: "no arguments shows usage", args: nil, wantStderr: "Usage:"},
@@ -673,7 +673,7 @@ func TestBinarySmoke(t *testing.T) {
 		wantCode int
 		wantOut  string // substring of combined stdout+stderr
 	}{
-		{name: "version", args: []string{"--version"}, wantCode: 0, wantOut: "leasegrid 0.1.0"},
+		{name: "version", args: []string{"--version"}, wantCode: 0, wantOut: "leasegrid 1.0.0"},
 		{name: "help", args: []string{"--help"}, wantCode: 0, wantOut: "LeaseGrid manages compute leases"},
 		{name: "unknown flag", args: []string{"--bogus"}, wantCode: 2, wantOut: "flag provided but not defined"},
 		{name: "list without providers", args: []string{"list"}, wantCode: 1, wantOut: "leasegrid: no providers configured"},
@@ -821,7 +821,7 @@ func TestConfigFlag(t *testing.T) {
 			noFile:     true,
 			args:       []string{"--config", "CONFIG", "--version"},
 			wantCode:   0,
-			wantStdout: "leasegrid 0.1.0\n",
+			wantStdout: "leasegrid 1.0.0\n",
 		},
 		{
 			name:     "config flag after the command is rejected",
@@ -904,7 +904,7 @@ func TestBinaryConfig(t *testing.T) {
 		{name: "valid file", args: []string{"--config", valid, "list"}, wantCode: 1, wantOut: `leasegrid: unknown provider "flux"`},
 		{name: "malformed file", args: []string{"--config", malformed, "list"}, wantCode: 1, wantOut: "invalid configuration"},
 		{name: "missing file", args: []string{"--config", missing, "list"}, wantCode: 1, wantOut: "leasegrid: read config"},
-		{name: "version ignores config", args: []string{"--config", missing, "--version"}, wantCode: 0, wantOut: "leasegrid 0.1.0"},
+		{name: "version ignores config", args: []string{"--config", missing, "--version"}, wantCode: 0, wantOut: "leasegrid 1.0.0"},
 		{name: "demo config", args: []string{"--config", demoConfig, "list"}, wantCode: 0, wantOut: "4990 ibc/170C...F2F1"},
 		{name: "demo empty result", args: []string{"--config", demoConfig, "list", "--provider", "demo-b", "--status", "closed"}, wantCode: 0, wantOut: "No leases found."},
 		{name: "demo unknown provider", args: []string{"--config", demoConfig, "list", "--provider", "akahs"}, wantCode: 2, wantOut: `leasegrid: unknown provider "akahs" (configured: demo-a, demo-b)`},
