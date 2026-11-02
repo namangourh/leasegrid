@@ -1092,6 +1092,27 @@ func TestShowProviderError(t *testing.T) {
 	}
 }
 
+// TestShowEmptyProvider checks a provider that answers with no leases at
+// all: the ID is not found (exit 1), and the error names the provider searched.
+func TestShowEmptyProvider(t *testing.T) {
+	empty := &fake.Provider{ProviderName: "empty"}
+	d, stdout, stderr := newTestDeps(empty)
+
+	err := run(t.Context(), []string{"show", "1001/1/1"}, d)
+	if !errors.Is(err, app.ErrLeaseNotFound) {
+		t.Fatalf("run() error = %v, want %v", err, app.ErrLeaseNotFound)
+	}
+	if want := `lease "1001/1/1" not found (searched: empty)`; err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+	if code := exitCode(err); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Errorf("stdout = %q, stderr = %q, want both empty: main prints the error", stdout.String(), stderr.String())
+	}
+}
+
 // TestShowReplacesControlCharacters checks, at the CLI boundary, that text
 // from a provider can't send escape sequences to the user's terminal.
 func TestShowReplacesControlCharacters(t *testing.T) {
