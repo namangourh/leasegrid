@@ -44,7 +44,7 @@ func (t Table) Render(w io.Writer, leases []lease.Lease) error {
 			cell(l.Provider),
 			cell(l.Name),
 			cell(string(l.Status)),
-			t.expires(l.Expires),
+			expires(l.Expires, t.Now),
 			cell(cost(l.Cost)),
 		}
 		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t"))
@@ -72,13 +72,13 @@ func cell(s string) string {
 }
 
 // expires formats an expiry as an absolute UTC time followed by how far it
-// is from t.Now, for example "2026-10-31 14:00 UTC (in 3h12m)". An unknown
+// is from now, for example "2026-10-31 14:00 UTC (in 3h12m)". An unknown
 // (zero) expiry is "-".
-func (t Table) expires(e time.Time) string {
+func expires(e, now time.Time) string {
 	if e.IsZero() {
 		return "-"
 	}
-	return e.UTC().Format("2006-01-02 15:04") + " UTC (" + relative(e.Sub(t.Now)) + ")"
+	return e.UTC().Format("2006-01-02 15:04") + " UTC (" + relative(e.Sub(now)) + ")"
 }
 
 // relative describes d, the time left until an expiry: "in 3h12m", or
