@@ -34,6 +34,7 @@ Flags go before the command, for example:
 
 Commands:
   list    List leases from the configured providers
+  show    Show one lease in detail
 
 Flags:
 `
@@ -51,9 +52,33 @@ Examples:
 Flags:
 `
 
+// showUsage is the help text for the show command.
+const showUsage = `Show one lease in detail.
+
+Usage:
+  leasegrid show [flags] <id>
+
+Lease IDs are unique only within one provider. If more than one provider has
+a lease with the ID, choose one with --provider.
+
+Examples:
+  leasegrid show 1002/1/1
+  leasegrid show 1001/1/1 --provider demo-b
+
+Flags:
+`
+
 // errUsage marks errors caused by invalid command-line input. The details
 // have already been printed to stderr, so main only sets the exit code.
 var errUsage = errors.New("invalid usage")
+
+// usageError prints err, a usage mistake found after the flags were parsed,
+// and marks it as a usage error. main doesn't print usage errors, so this is
+// where the user sees it.
+func usageError(stderr io.Writer, err error) error {
+	_, _ = fmt.Fprintf(stderr, "leasegrid: %v\n", err)
+	return fmt.Errorf("%w: %w", errUsage, err)
+}
 
 // deps is everything run needs from outside: where to write output, the
 // clock, and how to build the application service. main supplies real
@@ -193,6 +218,8 @@ func run(ctx context.Context, args []string, d deps) error {
 	switch cmd, rest := fs.Arg(0), fs.Args()[1:]; cmd {
 	case "list":
 		return runList(ctx, rest, *configPath, d)
+	case "show":
+		return runShow(ctx, rest, *configPath, d)
 	default:
 		_, _ = fmt.Fprintf(d.stderr, "unknown command %q\n\n", cmd)
 		fs.Usage()
@@ -278,10 +305,7 @@ func runList(ctx context.Context, args []string, configPath string, d deps) erro
 	}
 	leases, err := svc.ListLeases(ctx, app.ListOptions{Criteria: criteria, SortBy: sortBy})
 	if errors.Is(err, app.ErrUnknownProvider) {
-		// A mistyped --provider is a usage error. main doesn't print usage
-		// errors, so print this one here.
-		_, _ = fmt.Fprintf(d.stderr, "leasegrid: %v\n", err)
-		return fmt.Errorf("%w: %w", errUsage, err)
+		return usageError(d.stderr, err) // a mistyped --provider
 	}
 	if err != nil {
 		return err
@@ -293,4 +317,60 @@ func runList(ctx context.Context, args []string, configPath string, d deps) erro
 		return err
 	}
 	return output.Write(d.stdout, format, now, leases)
+}
+
+// runShow implements "leasegrid show": it finds the one lease with the given
+// ID and prints it in detail. The arguments are checked before the service
+// is built, so a mistake never reaches a provider.
+func runShow(ctx context.Context, args []string, configPath string, d deps) error {
+	now := d.now().UTC().Truncate(time.Second) // read once, as in runList
+
+	fs := flag.NewFlagSet("show", flag.ContinueOnError)
+	fs.SetOutput(d.stderr)
+	provider := fs.String("provider", "", "search only the provider with this `name`")
+	fs.Usage = func() {
+		// Nothing useful can be done if writing help text fails.
+		_, _ = fmt.Fprint(fs.Output(), showUsage)
+		fs.PrintDefaults()
+	}
+
+	// flag stops parsing at the first argument that isn't a flag. Taking that
+	// argument and parsing the rest again lets flags go before or after the ID.
+	var ids []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil
+			}
+			return fmt.Errorf("%w: %w", errUsage, err)
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		ids = append(ids, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+	if len(ids) != 1 || ids[0] == "" {
+		_, _ = fmt.Fprintf(d.stderr, "show needs exactly one lease ID, got %q\n\n", ids)
+		fs.Usage()
+		return errUsage
+	}
+
+	svc, err := d.newService(configPath, func() time.Time { return now })
+	if err != nil {
+		return err
+	}
+	l, err := svc.FindLease(ctx, ids[0], *provider)
+	var ambiguous *app.AmbiguousLeaseError
+	switch {
+	case errors.As(err, &ambiguous):
+		err = usageError(d.stderr, err)
+		_, _ = fmt.Fprintln(d.stderr, "leasegrid: choose one with --provider NAME")
+		return err
+	case errors.Is(err, app.ErrUnknownProvider):
+		return usageError(d.stderr, err) // a mistyped --provider
+	case err != nil:
+		return err
+	}
+	return output.Detail{Now: now}.Render(d.stdout, l)
 }

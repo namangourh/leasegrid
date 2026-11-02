@@ -116,6 +116,8 @@ func TestRun(t *testing.T) {
 		{name: "no arguments shows usage", args: nil, wantStderr: "Usage:"},
 		{name: "unknown command", args: []string{"frobnicate"}, wantErr: errUsage, wantStderr: `unknown command "frobnicate"`},
 		{name: "list help", args: []string{"list", "--help"}, wantStderr: "leasegrid list [flags]"},
+		{name: "show help", args: []string{"show", "--help"}, wantStderr: "leasegrid show [flags] <id>"},
+		{name: "usage lists show", args: nil, wantStderr: "show    Show one lease in detail"},
 	}
 
 	for _, tt := range tests {
@@ -827,6 +829,14 @@ func TestConfigFlag(t *testing.T) {
 			wantCode: 2,
 			wantMsg:  "flag provided but not defined: -config",
 		},
+		{
+			name:     "show loads the config",
+			content:  "providers: [\n",
+			args:     []string{"--config", "CONFIG", "show", "1001/1/1"},
+			wantErr:  config.ErrInvalid,
+			wantCode: 1,
+			wantMsg:  "invalid configuration",
+		},
 	}
 
 	for _, tt := range tests {
@@ -897,6 +907,10 @@ func TestBinaryConfig(t *testing.T) {
 		{name: "demo empty result", args: []string{"--config", demoConfig, "list", "--provider", "demo-b", "--status", "closed"}, wantCode: 0, wantOut: "No leases found."},
 		{name: "demo unknown provider", args: []string{"--config", demoConfig, "list", "--provider", "akahs"}, wantCode: 2, wantOut: `leasegrid: unknown provider "akahs" (configured: demo-a, demo-b)`},
 		{name: "demo invalid status", args: []string{"--config", demoConfig, "list", "--status", "expiring"}, wantCode: 2, wantOut: `invalid value "expiring" for flag -status`},
+		{name: "demo show", args: []string{"--config", demoConfig, "show", "1002/1/1"}, wantCode: 0, wantOut: "Name:       api\n"},
+		{name: "demo show missing", args: []string{"--config", demoConfig, "show", "missing-id"}, wantCode: 1, wantOut: `leasegrid: lease "missing-id" not found (searched: demo-a, demo-b)`},
+		{name: "demo show ambiguous", args: []string{"--config", demoConfig, "show", "1001/1/1"}, wantCode: 2, wantOut: "choose one with --provider NAME"},
+		{name: "show without an ID", args: []string{"--config", demoConfig, "show"}, wantCode: 2, wantOut: "show needs exactly one lease ID, got []"},
 	}
 
 	for _, tt := range tests {
@@ -909,5 +923,208 @@ func TestBinaryConfig(t *testing.T) {
 				t.Errorf("output does not contain %q:\n%s", tt.wantOut, out)
 			}
 		})
+	}
+}
+
+// TestShowDemoDetail is the golden test for show: with the clock fixed, the
+// README demo command prints exactly this view on every run.
+func TestShowDemoDetail(t *testing.T) {
+	want := `ID:         1002/1/1
+Provider:   demo-a
+Name:       api
+Status:     active
+Expires:    2026-10-30 12:00 UTC (in 10d0h)
+Cost/hour:  1800 uakt
+CPU:        1
+Memory:     1 GiB
+Storage:    5 GiB
+GPUs:       0
+`
+	stdout, stderr, err := runDemo(t, "show", "1002/1/1")
+	if err != nil {
+		t.Fatalf("run() error = %v\nstderr: %s", err, stderr)
+	}
+	if stdout != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+}
+
+// TestShowDemo checks how show finds, or fails to find, a lease through real
+// config loading and the demo providers. Both demo providers have a lease
+// with ID 1001/1/1.
+func TestShowDemo(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string // after "show"
+		wantName string   // the Name line on stdout, for a success
+		wantErr  error    // matched with errors.Is when set
+		wantCode int
+		wantMsg  string // must appear in stderr or the returned error
+	}{
+		{name: "provider before the ID", args: []string{"--provider", "demo-a", "1001/1/1"}, wantName: "web"},
+		{name: "provider after the ID", args: []string{"1001/1/1", "--provider", "demo-b"}, wantName: "worker"},
+		{name: "unique ID needs no provider", args: []string{"2001/1/1"}, wantName: "gpu"},
+		{
+			name:     "ambiguous ID",
+			args:     []string{"1001/1/1"},
+			wantCode: 2,
+			wantMsg:  "leasegrid: lease \"1001/1/1\" is ambiguous (found in: demo-a, demo-b)\nleasegrid: choose one with --provider NAME\n",
+		},
+		{
+			name:     "missing ID",
+			args:     []string{"missing-id"},
+			wantErr:  app.ErrLeaseNotFound,
+			wantCode: 1,
+			wantMsg:  `lease "missing-id" not found (searched: demo-a, demo-b)`,
+		},
+		{
+			name:     "ID only in a provider that wasn't searched",
+			args:     []string{"--provider", "demo-a", "2001/1/1"},
+			wantErr:  app.ErrLeaseNotFound,
+			wantCode: 1,
+			wantMsg:  `lease "2001/1/1" not found (searched: demo-a)`,
+		},
+		{
+			name:     "unknown provider",
+			args:     []string{"1001/1/1", "--provider", "akahs"},
+			wantErr:  app.ErrUnknownProvider,
+			wantCode: 2,
+			wantMsg:  `leasegrid: unknown provider "akahs" (configured: demo-a, demo-b)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr, err := runDemo(t, append([]string{"show"}, tt.args...)...)
+
+			if code := exitCode(err); code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d (error: %v)\nstderr: %s", code, tt.wantCode, err, stderr)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("run() error = %v, want it to match %v", err, tt.wantErr)
+			}
+			if tt.wantName != "" {
+				if want := "Name:       " + tt.wantName + "\n"; !strings.Contains(stdout, want) {
+					t.Errorf("stdout does not contain %q:\n%s", want, stdout)
+				}
+				return
+			}
+			seen := stderr
+			if err != nil {
+				seen += err.Error()
+			}
+			if !strings.Contains(seen, tt.wantMsg) {
+				t.Errorf("message %q not found in stderr or error:\n%s", tt.wantMsg, seen)
+			}
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty on error", stdout)
+			}
+		})
+	}
+}
+
+// TestShowInvalidArgs checks that a bad argument list is a usage error (exit
+// 2) that names the problem and writes nothing to stdout. It is caught before
+// the service is even built, so no provider is ever called.
+func TestShowInvalidArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string // after "show"
+		wantMsg string   // must appear in stderr
+	}{
+		{name: "no ID", args: nil, wantMsg: "show needs exactly one lease ID, got []"},
+		{name: "two IDs", args: []string{"1001/1/1", "1002/1/1"}, wantMsg: `got ["1001/1/1" "1002/1/1"]`},
+		{name: "extra argument after a flag", args: []string{"1001/1/1", "--provider", "demo-a", "extra"}, wantMsg: `got ["1001/1/1" "extra"]`},
+		{name: "empty ID", args: []string{""}, wantMsg: `got [""]`},
+		{name: "unknown flag", args: []string{"--format", "json", "1001/1/1"}, wantMsg: "flag provided but not defined: -format"},
+		{name: "missing value", args: []string{"1001/1/1", "--provider"}, wantMsg: "flag needs an argument: -provider"},
+		{name: "config flag after the command", args: []string{"--config", "x.yaml", "1001/1/1"}, wantMsg: "flag provided but not defined: -config"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, stdout, stderr := newTestDeps()
+			built := false
+			d.newService = func(string, func() time.Time) (*app.Service, error) {
+				built = true
+				return app.New(), nil
+			}
+
+			err := run(t.Context(), append([]string{"show"}, tt.args...), d)
+			if code := exitCode(err); code != 2 {
+				t.Errorf("exit code = %d, want 2 (error: %v)", code, err)
+			}
+			if !strings.Contains(stderr.String(), tt.wantMsg) {
+				t.Errorf("stderr does not contain %q:\n%s", tt.wantMsg, stderr)
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			if built {
+				t.Error("the service was built, want the arguments rejected before any provider is called")
+			}
+		})
+	}
+}
+
+// TestShowProviderError checks that a failing provider fails show, with the
+// usual exit code and no output, even when another provider has the lease:
+// the failing one might have it too.
+func TestShowProviderError(t *testing.T) {
+	ok := &fake.Provider{ProviderName: "ok", Leases: []lease.Lease{{ID: "1", Provider: "ok", Status: lease.StatusActive}}}
+	down := &fake.Provider{ProviderName: "down", Err: errors.New("connection refused")}
+	d, stdout, _ := newTestDeps(ok, down)
+
+	err := run(t.Context(), []string{"show", "1"}, d)
+	if !errors.Is(err, down.Err) {
+		t.Fatalf("run() error = %v, want %v", err, down.Err)
+	}
+	if code := exitCode(err); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty on error", stdout.String())
+	}
+}
+
+// TestShowReplacesControlCharacters checks, at the CLI boundary, that text
+// from a provider can't send escape sequences to the user's terminal.
+func TestShowReplacesControlCharacters(t *testing.T) {
+	evil := &fake.Provider{ProviderName: "evil", Leases: []lease.Lease{
+		{ID: "1", Provider: "evil", Name: "\x1b]0;pwned\a\x1b[2J", Status: lease.StatusActive},
+	}}
+	d, stdout, stderr := newTestDeps(evil)
+	if err := run(t.Context(), []string{"show", "1"}, d); err != nil {
+		t.Fatalf("run() error = %v\nstderr: %s", err, stderr)
+	}
+	if strings.ContainsAny(stdout.String(), "\x1b\a") {
+		t.Errorf("stdout = %q, want no control characters", stdout.String())
+	}
+}
+
+// TestShowCancellation proves the ctx passed to run reaches the provider
+// that show is waiting on.
+func TestShowCancellation(t *testing.T) {
+	slow := fake.NewBlocking("slow")
+	d, stdout, _ := newTestDeps(slow)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	errc := make(chan error, 1)
+	go func() { errc <- run(ctx, []string{"show", "1001/1/1"}, d) }()
+	<-slow.Started()
+	cancel()
+
+	err := waitErr(t, errc)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run() error = %v, want context.Canceled", err)
+	}
+	if code := exitCode(err); code != 130 {
+		t.Errorf("exit code = %d, want 130", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
 	}
 }
