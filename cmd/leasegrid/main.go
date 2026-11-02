@@ -17,6 +17,7 @@ import (
 	"github.com/namangourh/leasegrid/internal/output"
 	"github.com/namangourh/leasegrid/internal/providers/akash"
 	"github.com/namangourh/leasegrid/internal/providers/demo"
+	"github.com/namangourh/leasegrid/internal/summary"
 )
 
 // version is a var, not a const, so release builds can override it with
@@ -35,6 +36,7 @@ Flags go before the command, for example:
 Commands:
   list    List leases from the configured providers
   show    Show one lease in detail
+  status  Summarize leases: counts, leases expiring soon, spend per hour
 
 Flags:
 `
@@ -68,6 +70,25 @@ Examples:
 Flags:
 `
 
+// statusUsage is the help text for the status command.
+const statusUsage = `Summarize leases: how many have each status, how many active leases expire
+soon, and what the active leases cost per hour, then list the leases.
+
+Usage:
+  leasegrid status [flags]
+
+Unlike in list, --expiring-within doesn't filter: it sets the window for the
+"Expiring soon" count. The table is colored only on a terminal; --no-color or
+the NO_COLOR environment variable turns color off.
+
+Examples:
+  leasegrid status
+  leasegrid status --provider demo-a --expiring-within 24h
+  leasegrid status --format json
+
+Flags:
+`
+
 // errUsage marks errors caused by invalid command-line input. The details
 // have already been printed to stderr, so main only sets the exit code.
 var errUsage = errors.New("invalid usage")
@@ -78,6 +99,18 @@ var errUsage = errors.New("invalid usage")
 func usageError(stderr io.Writer, err error) error {
 	_, _ = fmt.Fprintf(stderr, "leasegrid: %v\n", err)
 	return fmt.Errorf("%w: %w", errUsage, err)
+}
+
+// positiveDuration parses an --expiring-within value such as 90m or 24h.
+func positiveDuration(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, errors.New("not a duration such as 90m or 24h")
+	}
+	if d <= 0 {
+		return 0, errors.New("must be greater than zero")
+	}
+	return d, nil
 }
 
 // deps is everything run needs from outside: where to write output, the
@@ -220,6 +253,8 @@ func run(ctx context.Context, args []string, d deps) error {
 		return runList(ctx, rest, *configPath, d)
 	case "show":
 		return runShow(ctx, rest, *configPath, d)
+	case "status":
+		return runStatus(ctx, rest, *configPath, d)
 	default:
 		_, _ = fmt.Fprintf(d.stderr, "unknown command %q\n\n", cmd)
 		fs.Usage()
@@ -270,12 +305,9 @@ func runList(ctx context.Context, args []string, configPath string, d deps) erro
 	})
 	var expiringWithin time.Duration
 	fs.Func("expiring-within", "list only leases that expire within this `duration`, e.g. 90m or 24h (a week is 168h)", func(s string) error {
-		within, err := time.ParseDuration(s)
+		within, err := positiveDuration(s)
 		if err != nil {
-			return errors.New("not a duration such as 90m or 24h")
-		}
-		if within <= 0 {
-			return errors.New("must be greater than zero")
+			return err
 		}
 		expiringWithin = within
 		return nil
@@ -373,4 +405,89 @@ func runShow(ctx context.Context, args []string, configPath string, d deps) erro
 		return err
 	}
 	return output.Detail{Now: now}.Render(d.stdout, l)
+}
+
+// runStatus implements "leasegrid status": it lists leases as list does,
+// summarizes them and prints the dashboard. Every flag is validated before
+// any provider is called, and a failing provider fails the whole command, so
+// a total never silently leaves out a provider's leases.
+func runStatus(ctx context.Context, args []string, configPath string, d deps) error {
+	now := d.now().UTC().Truncate(time.Second) // read once, as in runList
+
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(d.stderr)
+
+	format := output.FormatTable
+	fs.Func("format", "output `format`: table or json (default table)", func(s string) error {
+		f, err := output.ParseStatusFormat(s)
+		if err != nil {
+			return err
+		}
+		format = f
+		return nil
+	})
+	provider := fs.String("provider", "", "summarize only the provider with this `name`")
+	var status lease.Status
+	fs.Func("status", "summarize only leases with this `status`: active, closed or insufficient_funds", func(s string) error {
+		st, err := lease.ParseStatus(s)
+		if err != nil {
+			return err
+		}
+		status = st
+		return nil
+	})
+	window := summary.DefaultExpiringWithin
+	fs.Func("expiring-within", "count active leases that expire within this `duration` as expiring soon (default 168h, a week)", func(s string) error {
+		within, err := positiveDuration(s)
+		if err != nil {
+			return err
+		}
+		window = within
+		return nil
+	})
+	noColor := fs.Bool("no-color", false, "never color the table, even on a terminal")
+
+	fs.Usage = func() {
+		// Nothing useful can be done if writing help text fails.
+		_, _ = fmt.Fprint(fs.Output(), statusUsage)
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("%w: %w", errUsage, err)
+	}
+	if fs.NArg() > 0 {
+		// A forgotten flag name, as in "status demo-a", must not be ignored.
+		_, _ = fmt.Fprintf(d.stderr, "status takes no arguments, got %q\n\n", fs.Args())
+		fs.Usage()
+		return errUsage
+	}
+
+	svc, err := d.newService(configPath, func() time.Time { return now })
+	if err != nil {
+		return err
+	}
+	criteria := lease.Criteria{Provider: *provider, Status: status}
+	leases, err := svc.ListLeases(ctx, app.ListOptions{Criteria: criteria, SortBy: app.DefaultSort})
+	if errors.Is(err, app.ErrUnknownProvider) {
+		return usageError(d.stderr, err) // a mistyped --provider
+	}
+	if err != nil {
+		return err
+	}
+
+	sum, err := summary.Calculate(leases, now, window)
+	if err != nil {
+		return err
+	}
+	color := output.ColorAuto
+	if *noColor {
+		color = output.ColorNever
+	}
+	return output.WriteStatus(d.stdout, format, output.Status{
+		Now: now, Window: window, Summary: sum, Leases: leases, Color: color,
+	})
 }

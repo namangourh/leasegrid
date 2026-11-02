@@ -118,6 +118,8 @@ func TestRun(t *testing.T) {
 		{name: "list help", args: []string{"list", "--help"}, wantStderr: "leasegrid list [flags]"},
 		{name: "show help", args: []string{"show", "--help"}, wantStderr: "leasegrid show [flags] <id>"},
 		{name: "usage lists show", args: nil, wantStderr: "show    Show one lease in detail"},
+		{name: "status help", args: []string{"status", "--help"}, wantStderr: "leasegrid status [flags]"},
+		{name: "usage lists status", args: nil, wantStderr: "status  Summarize leases"},
 	}
 
 	for _, tt := range tests {
