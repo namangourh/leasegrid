@@ -33,13 +33,18 @@ const secretBody = `{"error": "SECRET-MARKER token=abc123"}`
 // srv, plus the buffers that capture stdout and stderr. The provider trusts
 // srv's certificate, so requests stay on this machine.
 func newAkashDeps(srv *httptest.Server) (deps, *bytes.Buffer, *bytes.Buffer) {
+	return newAkashDepsFor(srv, akashOwner)
+}
+
+// newAkashDepsFor is newAkashDeps with the provider configured for owner.
+func newAkashDepsFor(srv *httptest.Server, owner string) (deps, *bytes.Buffer, *bytes.Buffer) {
 	var stdout, stderr bytes.Buffer
 	d := deps{
 		stdout: &stdout,
 		stderr: &stderr,
 		now:    testClock,
 		newService: func(_ string, now func() time.Time) (*app.Service, error) {
-			p, err := akash.New(akash.Config{BaseURL: srv.URL, Owner: akashOwner, HTTPClient: srv.Client(), Now: now})
+			p, err := akash.New(akash.Config{BaseURL: srv.URL, Owner: owner, HTTPClient: srv.Client(), Now: now})
 			if err != nil {
 				return nil, err
 			}
@@ -255,4 +260,142 @@ func TestShowAkashCancellation(t *testing.T) {
 		t.Errorf("stdout = %q, want empty", stdout.String())
 	}
 	assertHidesPrivateData(t, stderr.String()+err.Error(), srv)
+}
+
+// TestAkashFailureContract is the failure-contract matrix in
+// docs/akash-adapter.md, run end to end through "leasegrid list": a local TLS
+// server plays the Akash API. Each row checks the error category, the exit
+// code, the exact message main prints after "leasegrid: ", an empty stdout,
+// and that nothing private leaks.
+func TestAkashFailureContract(t *testing.T) {
+	malformed, err := os.ReadFile(filepath.Join(akashTestdata, "lease_malformed.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	// oneLease is a lease list holding one lease with the given state and
+	// price per block in uakt.
+	oneLease := func(state, amount string) string {
+		return `{"leases": [{"lease": {
+			"id": {"owner": "` + akashOwner + `", "dseq": "1001", "gseq": 1, "oseq": 1,
+			       "provider": "akash1testhost00000000000000000000000000000"},
+			"state": "` + state + `", "price": {"denom": "uakt", "amount": "` + amount + `"}}}],
+			"pagination": {"next_key": null}}`
+	}
+
+	tests := []struct {
+		name     string
+		owner    string // the configured owner; "" means akashOwner
+		status   int    // the HTTP status of every response
+		body     string // the body of every response
+		cancel   string // "before": cancel before run starts; "during": the server hangs and the test cancels
+		wantErr  error  // nil means success
+		wantCode int
+		wantMsg  string // the error's text; main prints it after "leasegrid: "
+	}{
+		{
+			name: "1 unknown lease state", status: 200, body: oneLease("pending", "5"),
+			wantErr: providers.ErrBadResponse, wantCode: 1,
+			wantMsg: `provider akash: bad response: lease 1001/1/1: unsupported state "pending"`,
+		},
+		{
+			name: "2 HTTP 429", status: 429, body: secretBody,
+			wantErr: providers.ErrRateLimited, wantCode: 1,
+			wantMsg: "provider akash: rate limited: lease list returned HTTP 429",
+		},
+		{
+			name: "3 malformed JSON", status: 200, body: string(malformed),
+			wantErr: providers.ErrBadResponse, wantCode: 1,
+			wantMsg: "provider akash: bad response: lease list: invalid JSON: unexpected end of JSON input",
+		},
+		{
+			name: "4 cancelled before the request", status: 200, body: oneLease("active", "5"), cancel: "before",
+			wantErr: context.Canceled, wantCode: 130,
+			wantMsg: "provider akash: lease list: context canceled",
+		},
+		{
+			name: "5 cancelled during a slow request", cancel: "during",
+			wantErr: context.Canceled, wantCode: 130,
+			wantMsg: "provider akash: lease list: context canceled",
+		},
+		{
+			name: "6 HTTP 500 with secrets in the body", status: 500, body: secretBody,
+			wantErr: providers.ErrUnavailable, wantCode: 1,
+			wantMsg: "provider akash: provider unavailable: lease list returned HTTP 500",
+		},
+		{
+			// The server answers 400 unless it receives the owner intact.
+			name: "7 owner that needs URL escaping", owner: "akash1x&y=z+w #v",
+			status: 200, body: `{"leases": [], "pagination": {"next_key": null}}`,
+			wantCode: 0,
+		},
+		{
+			name: "8 per-hour cost beyond int64", status: 200, body: oneLease("active", "100000000000000000"),
+			wantErr: providers.ErrBadResponse, wantCode: 1,
+			wantMsg: "provider akash: bad response: lease 1001/1/1: price: amount out of range",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner := tt.owner
+			if owner == "" {
+				owner = akashOwner
+			}
+			started := make(chan struct{}, 1)
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.cancel == "during" {
+					started <- struct{}{}
+					select {
+					case <-r.Context().Done(): // the client cancelled
+					case <-time.After(10 * time.Second): // safety net: never hang the test run
+					}
+					return
+				}
+				if r.URL.Query().Get("filters.owner") != owner {
+					http.Error(w, "unexpected owner", http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			d, stdout, stderr := newAkashDepsFor(srv, owner)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tt.cancel == "before" {
+				cancel()
+			}
+			errc := make(chan error, 1)
+			go func() { errc <- run(ctx, []string{"list"}, d) }()
+			if tt.cancel == "during" {
+				select {
+				case <-started:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the request never reached the server")
+				}
+				cancel()
+			}
+			err := waitErr(t, errc)
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("run() error = %v, want %v", err, tt.wantErr)
+			}
+			if code := exitCode(err); code != tt.wantCode {
+				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
+			}
+			seen := stdout.String() + stderr.String()
+			if err != nil {
+				if err.Error() != tt.wantMsg {
+					t.Errorf("error = %q, want %q", err, tt.wantMsg)
+				}
+				seen += err.Error()
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+			assertHidesPrivateData(t, seen, srv)
+		})
+	}
 }
