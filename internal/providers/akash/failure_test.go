@@ -246,6 +246,23 @@ func TestListLeasesTimeout(t *testing.T) {
 	}
 }
 
+// TestListLeasesAlreadyCancelled checks that a context cancelled before the
+// call returns at once, without sending a request.
+func TestListLeasesAlreadyCancelled(t *testing.T) {
+	api := newStubAPI(t, http.StatusOK, oneActiveLease)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := newTestProvider(t, api.Server).ListLeases(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListLeases() error = %v, want context.Canceled", err)
+	}
+	if n := api.calls.Load(); n != 0 {
+		t.Errorf("requests = %d, want 0", n)
+	}
+	assertSafeError(t, err)
+}
+
 // TestListLeasesCallerCancellation proves the caller's context reaches the
 // HTTP request: cancelling it aborts a request that would otherwise hang.
 func TestListLeasesCallerCancellation(t *testing.T) {

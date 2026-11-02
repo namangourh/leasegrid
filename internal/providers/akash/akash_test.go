@@ -2,8 +2,10 @@ package akash
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -175,6 +177,36 @@ func TestNewDefaultsBaseURL(t *testing.T) {
 	}
 	if got := p.baseURL.String(); got != DefaultBaseURL {
 		t.Errorf("base URL = %q, want %q", got, DefaultBaseURL)
+	}
+}
+
+// TestListLeasesEscapesOwner checks that an owner with URL-special characters
+// reaches the API as one intact query value: nothing is cut off at "&" or "#",
+// and no extra parameter is injected.
+func TestListLeasesEscapesOwner(t *testing.T) {
+	const owner = "akash1x&y=z+w #v"
+	queries := make(chan url.Values, 1)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries <- r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"leases": [], "pagination": {"next_key": null}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	p, err := New(Config{BaseURL: srv.URL, Owner: owner, HTTPClient: srv.Client()})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := p.ListLeases(t.Context()); err != nil {
+		t.Fatalf("ListLeases() error = %v", err)
+	}
+
+	q := <-queries
+	if got := q["filters.owner"]; len(got) != 1 || got[0] != owner {
+		t.Errorf("filters.owner = %q, want exactly [%q]", got, owner)
+	}
+	if len(q) != 2 {
+		t.Errorf("query = %v, want only filters.owner and pagination.limit", q)
 	}
 }
 

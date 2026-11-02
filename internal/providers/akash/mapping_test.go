@@ -189,6 +189,8 @@ func TestToLeaseErrors(t *testing.T) {
 		{name: "missing denom", in: akashLease("1", "active", "", "1"), wantMsg: "missing denom"},
 		{name: "missing amount", in: akashLease("1", "active", "uakt", ""), wantMsg: "missing amount"},
 		{name: "exponent amount", in: akashLease("1", "active", "uakt", "1e999999999"), wantMsg: "invalid amount"},
+		// 10^17 per 6-second block is 6*10^19 per hour, more than an int64 holds.
+		{name: "per-hour cost too large", in: akashLease("1", "active", "uakt", "100000000000000000"), wantMsg: "price: amount out of range"},
 		{name: "group not found", in: akashLease("1", "active", "uakt", "1"), dep: otherGroup, wantMsg: "deployment has no group 1"},
 		{
 			name:    "invalid resource quantity",
