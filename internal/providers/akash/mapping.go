@@ -16,6 +16,7 @@ import (
 type converter struct {
 	now       time.Time     // the moment expiry estimates count from
 	blockTime time.Duration // average time between Akash blocks; must be > 0
+	owner     string        // the configured owner; every lease must belong to it
 }
 
 // toLease converts one Akash lease. dep is the lease's deployment, and
@@ -26,6 +27,14 @@ func (c converter) toLease(l leaseDTO, dep *deploymentResponse, spendPerBlock *b
 	id, err := leaseKey(l.ID)
 	if err != nil {
 		return lease.Lease{}, badResponse("lease: %v", err)
+	}
+	// Neither address appears in these errors: the owner must stay out of
+	// output, and a mismatch says enough.
+	if l.ID.Owner != c.owner {
+		return lease.Lease{}, badResponse("lease %s: id.owner is not the configured owner", id)
+	}
+	if l.ID.Provider == "" {
+		return lease.Lease{}, badResponse("lease %s: missing id.provider", id)
 	}
 	status, err := mapState(l.State)
 	if err != nil {

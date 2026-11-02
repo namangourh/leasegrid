@@ -20,7 +20,7 @@ const (
 // testNow is the fixed "current time" all expiry estimates count from.
 var testNow = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 
-var testConverter = converter{now: testNow, blockTime: 6 * time.Second}
+var testConverter = converter{now: testNow, blockTime: 6 * time.Second, owner: testOwner}
 
 // akashLease builds an Akash lease record for deployment dseq, group 1, order 1.
 func akashLease(dseq, state, denom, amount string) leaseDTO {
@@ -181,6 +181,9 @@ func TestToLeaseErrors(t *testing.T) {
 		{name: "non-numeric dseq", in: withID(leaseID{DSeq: "abc", GSeq: 1, OSeq: 1}), wantMsg: "invalid id.dseq"},
 		{name: "missing gseq", in: withID(leaseID{DSeq: "1", OSeq: 1}), wantMsg: "missing id.gseq"},
 		{name: "missing oseq", in: withID(leaseID{DSeq: "1", GSeq: 1}), wantMsg: "missing id.oseq"},
+		{name: "another owner", in: withID(leaseID{Owner: "akash1someoneelse", DSeq: "1", GSeq: 1, OSeq: 1, Provider: testHost}), wantMsg: "id.owner is not the configured owner"},
+		{name: "missing owner", in: withID(leaseID{DSeq: "1", GSeq: 1, OSeq: 1, Provider: testHost}), wantMsg: "id.owner is not the configured owner"},
+		{name: "missing provider", in: withID(leaseID{Owner: testOwner, DSeq: "1", GSeq: 1, OSeq: 1}), wantMsg: "missing id.provider"},
 		{name: "missing state", in: akashLease("1", "", "uakt", "1"), wantMsg: "missing state"},
 		{name: "unsupported state", in: akashLease("1", "pending", "uakt", "1"), wantMsg: `unsupported state "pending"`},
 		{name: "missing denom", in: akashLease("1", "active", "", "1"), wantMsg: "missing denom"},
@@ -203,6 +206,9 @@ func TestToLeaseErrors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantMsg) {
 				t.Errorf("toLease() error = %q, want it to contain %q", err, tt.wantMsg)
+			}
+			if strings.Contains(err.Error(), "akash1") {
+				t.Errorf("toLease() error = %q, want no address in it", err)
 			}
 		})
 	}

@@ -163,6 +163,8 @@ func TestListLeasesBadBodies(t *testing.T) {
 		{name: "missing required field", body: readFixture(t, "lease_missing_field.json"), wantMsg: "missing id.dseq"},
 		{name: "not an object", body: `"just a string"`, wantMsg: "lease list: invalid JSON"},
 		{name: "unsupported lease state", body: strings.Replace(oneActiveLease, `"active"`, `"pending"`, 1), wantMsg: `unsupported state "pending"`},
+		{name: "lease of another owner", body: strings.Replace(oneActiveLease, testOwner, "akash1SECRET-MARKER", 1), wantMsg: "lease 1001/1/1: id.owner is not the configured owner"},
+		{name: "missing provider address", body: strings.Replace(oneActiveLease, testHost, "", 1), wantMsg: "lease 1001/1/1: missing id.provider"},
 	}
 
 	for _, tt := range tests {

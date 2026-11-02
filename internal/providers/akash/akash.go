@@ -148,7 +148,7 @@ func (p *Provider) ListLeases(ctx context.Context) ([]lease.Lease, error) {
 		return nil, err
 	}
 
-	conv := converter{now: p.now(), blockTime: p.blockTime}
+	conv := converter{now: p.now(), blockTime: p.blockTime, owner: p.owner}
 
 	// Validate every lease record (ID, state, price) before making any more
 	// requests: a bad lease list costs one request, not one per deployment,
