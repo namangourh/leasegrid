@@ -41,11 +41,11 @@ Or build from a clone:
 go build -o leasegrid ./cmd/leasegrid
 ```
 
-## Try it offline
+## Quick start (offline)
 
 [`examples/demo.yaml`](examples/demo.yaml) enables two built-in demo providers,
 `demo-a` and `demo-b`, which serve fixed sample leases. Nothing is sent over
-the network. From a clone of this repository (use `go run ./cmd/leasegrid` in
+the network, and no account or wallet is needed. From a clone of this repository (use `go run ./cmd/leasegrid` in
 place of `leasegrid` if you haven't installed it):
 
 ```sh
@@ -131,7 +131,9 @@ that have passed or expire soon.
 
 ## List your Akash leases
 
-Create a config file with your Akash wallet address as `owner`:
+This part is optional: everything above works offline, and neither the test
+suite nor CI ever contacts Akash. To see your real leases, create a config
+file with your Akash wallet address as `owner`:
 
 ```yaml
 providers:
@@ -258,6 +260,34 @@ How it behaves:
 | 1 | Error, such as a missing or invalid config file, no providers configured, a provider failure, a lease `show` can't find, or a spend total too large to count exactly |
 | 2 | Invalid usage: an unknown flag, command, format, status or sort key, a `--provider` name that isn't configured, an invalid duration, a missing or extra lease ID, an ID that several providers have, or an argument after `status` |
 | 130 | Interrupted with Ctrl+C |
+
+### When something fails
+
+Errors go to stderr, prefixed with `leasegrid:`, and nothing is printed on
+stdout. A provider error names the provider and the request that failed. It
+never includes the endpoint, the wallet address, the request's query string or
+the provider's raw response.
+
+```text
+$ leasegrid --config examples/demo.yaml show missing-id
+leasegrid: lease "missing-id" not found (searched: demo-a, demo-b)
+
+$ leasegrid list --config examples/demo.yaml
+flag provided but not defined: -config
+```
+
+The second one is a usage error (exit status 2, followed by the command's
+help): `--config` is a global flag, so it goes before the command. Akash failures look like this, taken from the
+test suite:
+
+```text
+leasegrid: provider akash: rate limited: lease list returned HTTP 429
+leasegrid: provider akash: provider unavailable: lease list returned HTTP 500
+leasegrid: provider akash: bad response: lease 1001/1/1: unsupported state "pending"
+```
+
+[docs/akash-adapter.md](docs/akash-adapter.md) lists every Akash failure, its
+exit status and whether trying again can help.
 
 ## Configuration
 

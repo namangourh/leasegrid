@@ -250,6 +250,56 @@ cancellation exiting 1. Every bug in the third part was caught by
   failure tests).
 - **The race detector** runs in CI only.
 
+## Release check (2026-11-02)
+
+A checkpoint pass over the whole tool: every standard check, plus the built
+binary run against the offline demo config. It was run on the Windows
+development machine (Windows 11, Go 1.26.3) at `8a1c99a` plus one new test,
+`TestShowEmptyProvider` (`show` when the provider returns no leases: exit 1,
+`not found (searched: empty)`).
+
+| Check | Result |
+|---|---|
+| `gofmt -l .` | no files |
+| `go vet ./...` | clean |
+| `go build ./...` | ok |
+| `go mod tidy -diff` | no diff |
+| golangci-lint v2.14.0 | 0 issues |
+| `go test ./... -count=1` | all packages pass; 469 passing tests and subtests, 0 failing |
+| `go test -cover ./...` | `cmd/leasegrid` 96.8%, `internal/output` 98.7%, `internal/providers/akash` 94.6%, every other package 100% |
+| `go test -race ./...` | CI only: it needs cgo, and this machine has no C compiler |
+
+The new test was checked by planting four bugs (not found reported as success,
+the sentinel not wrapped, the searched providers left out, not found treated
+as a usage error); it caught all four.
+
+### Smoke runs
+
+The binary was run from the repository root with an empty user config
+directory. Each prediction was written down before the run.
+
+| # | Command | Predicted | Observed | Exit |
+|---|---|---|---|---|
+| 1 | `leasegrid --help` | usage on stderr listing `list`, `show`, `status`, `-config`, `-version` | as predicted | 0 |
+| 2 | `leasegrid --version` | `leasegrid 0.1.0` on stdout | as predicted | 0 |
+| 3 | `leasegrid --config examples/demo.yaml list` | 5 rows: worker, web, gpu, api, batch | as predicted | 0 |
+| 4 | `leasegrid --config examples/demo.yaml list --format json` | a JSON array of the same 5 leases | as predicted | 0 |
+| 5 | `leasegrid --config examples/demo.yaml show 1002/1/1` | api, 1800 uakt, 1 CPU, 1 GiB, 5 GiB, 0 GPUs | as predicted | 0 |
+| 6 | `leasegrid --config examples/demo.yaml show missing-id` | `leasegrid: lease "missing-id" not found (searched: demo-a, demo-b)` on stderr, stdout empty | as predicted | 1 |
+| 7 | `leasegrid list --config examples/demo.yaml` | `flag provided but not defined: -config` and the `list` help; stdout empty | as predicted | 2 |
+
+7 of 7 matched, with no escape codes in any output. Run 7 shows that
+`--config` must go before the command.
+
+### Notes
+
+- **Fixture-backed runs use the demo providers.** The built binary needs an
+  HTTPS endpoint with a trusted certificate, so it can't read the recorded
+  Akash responses directly. Those run in-process against a local TLS server
+  (see the Akash section above).
+- **Code comments were reviewed:** every package has a package comment, there
+  are no `TODO`s, and lint reports nothing, so no comments were changed.
+
 ## Earlier features
 
 Their evidence is in the commit history and CI:
