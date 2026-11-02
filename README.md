@@ -19,6 +19,8 @@ Early development. What works today:
 - It filters by provider, status and time to expiry, sorts by several keys, and
   prints a table, JSON or YAML.
 - `leasegrid show <id>` prints one lease in detail.
+- `leasegrid status` prints a dashboard: how many leases have each status, how
+  many active leases expire soon, and what the active leases cost per hour.
 - Built-in demo providers let you try every feature offline.
 - A YAML configuration file, strictly parsed and validated.
 
@@ -103,6 +105,30 @@ leasegrid: choose one with --provider NAME
 
 Add `--provider demo-b`, before or after the ID, to see the `worker` lease.
 
+For an overview, run `status`:
+
+```sh
+leasegrid --config examples/demo.yaml status
+```
+
+```text
+Leases:         5 (3 active, 1 insufficient_funds, 1 closed)
+Expiring soon:  2 within 7d0h
+Active spend:   4990 ibc/170C677610AC31DF0904FFE09CD3B5C657492170E7E52372E48756B71E56F2F1 per hour
+                37800 uakt per hour
+By provider:    demo-a 3, demo-b 2
+
+ID        PROVIDER  NAME    STATUS              EXPIRES                                  COST/HOUR
+1001/1/1  demo-b    worker  insufficient_funds  2026-11-02 08:40 UTC (expired 2h0m ago)  900 uakt
+1001/1/1  demo-a    web     active              2026-11-02 13:40 UTC (in 3h0m)           4990 ibc/170C...F2F1
+2001/1/1  demo-b    gpu     active              2026-11-02 13:40 UTC (in 3h0m)           36000 uakt
+1002/1/1  demo-a    api     active              2026-11-12 10:40 UTC (in 10d0h)          1800 uakt
+1003/1/1  demo-a    batch   closed              -                                        1200 uakt
+```
+
+In a terminal, statuses are colored, and so are the expiries of active leases
+that have passed or expire soon.
+
 ## List your Akash leases
 
 Create a config file with your Akash wallet address as `owner`:
@@ -135,6 +161,7 @@ estimate.
 ```text
 leasegrid [--config PATH] list [flags]
 leasegrid [--config PATH] show [--provider NAME] <id>
+leasegrid [--config PATH] status [flags]
 ```
 
 Global flags such as `--config` go before the command.
@@ -184,13 +211,51 @@ didn't report.
 - `show` prints text only. For machine-readable output, use
   `list --format json --provider NAME`.
 
+### `status`
+
+`status` summarizes the leases, then lists them in the same table as `list`,
+soonest expiry first.
+
+| `status` flag | Values | Default |
+|---|---|---|
+| `--format` | `table`, `json` | `table` |
+| `--provider` | a configured provider name | all enabled providers |
+| `--status` | `active`, `closed`, `insufficient_funds` | any status |
+| `--expiring-within` | a Go duration such as `24h` | `168h` (a week) |
+| `--no-color` | | color on a terminal |
+
+How it behaves:
+
+- **`--provider` and `--status` filter** the leases before they are counted, so
+  every number describes the leases shown.
+- **`--expiring-within` doesn't filter**, unlike in `list`. It sets the window
+  for **Expiring soon**: active leases with a known expiry that is still in the
+  future but within the window.
+- **Active spend** adds up the per-hour cost of active leases, one total per
+  denom. Closed leases cost nothing now, and an `insufficient_funds` lease has
+  stopped paying. Denoms are never converted or added together, and totals are
+  exact integers. A total too large to count exactly is an error, not a wrong
+  number.
+- **No leases** still prints the zero counts, followed by `No leases found.`
+- **A provider that fails** fails the whole command, with nothing on stdout, so
+  a total never silently leaves out a provider's leases.
+- **Color** is used only when stdout is a terminal. `--no-color`, or a
+  non-empty `NO_COLOR` environment variable, turns it off; piped output and
+  JSON never have color. If an old Windows console shows codes such as `←[32m`
+  instead of colors, use `--no-color`.
+- **JSON** is one object for scripts: `as_of`, `expiring_within`, `total`,
+  `active`, `insufficient_funds`, `closed`, `expiring_soon`, `by_provider`,
+  `spend_per_hour` (a list of `{per_hour, denom}`) and `leases` (the same
+  objects as `list --format json`). Empty values are `{}` or `[]`, never
+  `null`.
+
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success, including an empty result |
-| 1 | Error, such as a missing or invalid config file, no providers configured, a provider failure, or a lease `show` can't find |
-| 2 | Invalid usage: an unknown flag, command, format, status or sort key, a `--provider` name that isn't configured, an invalid duration, a missing or extra lease ID, or an ID that several providers have |
+| 1 | Error, such as a missing or invalid config file, no providers configured, a provider failure, a lease `show` can't find, or a spend total too large to count exactly |
+| 2 | Invalid usage: an unknown flag, command, format, status or sort key, a `--provider` name that isn't configured, an invalid duration, a missing or extra lease ID, an ID that several providers have, or an argument after `status` |
 | 130 | Interrupted with Ctrl+C |
 
 ## Configuration
@@ -245,7 +310,8 @@ No test touches the network. Akash tests run against recorded responses served
 by a local TLS server. An opt-in test runs against the real API; see
 `internal/providers/akash/live_test.go`.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details, and
+[docs/verification.md](docs/verification.md) for how each feature was verified.
 
 ## Roadmap
 
@@ -257,8 +323,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
    and Akash wired in through the config file
 6. ✅ `show`: one lease in detail, with ambiguous IDs reported instead of
    guessed
-7. Query several providers at once, with partial results when one fails
-8. `status` command
+7. ✅ `status`: lease counts, leases expiring soon and spend per hour, with
+   color on a terminal
+8. Query several providers at once, with partial results when one fails
 
 See [DESIGN.md](DESIGN.md) for the technical design.
 

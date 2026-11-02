@@ -10,6 +10,9 @@ One CLI for viewing compute leases across DePIN providers, starting with Akash.
 - `leasegrid [--config PATH] list` with `--format table|json|yaml`, `--provider`,
   `--status`, `--expiring-within` and `--sort-by`
 - `leasegrid [--config PATH] show [--provider NAME] <id>`: one lease in detail
+- `leasegrid [--config PATH] status` with `--format table|json`, `--provider`,
+  `--status`, `--expiring-within` and `--no-color`: a dashboard of lease
+  counts, leases expiring soon and spend per hour
 - An Akash provider that reads real leases from Akash's public REST API,
   enabled from the config file with an owner wallet address
 - Built-in demo providers (`demo-a`, `demo-b`) for trying LeaseGrid offline
@@ -21,7 +24,6 @@ One CLI for viewing compute leases across DePIN providers, starting with Akash.
 ## Next Slice
 
 - Query providers concurrently, and show partial results when one fails
-- A `status` command
 
 ## Non-Goals for Now
 
@@ -41,16 +43,18 @@ One CLI for viewing compute leases across DePIN providers, starting with Akash.
 | `internal/app` | Use cases: declares the `Provider` interface, selects and calls providers, enforces their contract, merges, filters and sorts results, finds one lease by ID, labels errors |
 | `internal/config` | Reads, strictly parses and validates the YAML config file; knows nothing about flags, specific providers or exit codes |
 | `internal/lease` | Lease model (cost, resources, expiry), validation and pure helpers: `Filter`, `Sort` and the flag parsers `ParseStatus` and `ParseSortKey` |
-| `internal/output` | Renders leases to any `io.Writer`: table, JSON and YAML through a `Formatter` interface, and a one-lease detail view |
+| `internal/output` | Renders leases to any `io.Writer`: table, JSON and YAML through a `Formatter` interface, a one-lease detail view, and the status dashboard with its optional color |
 | `internal/providers` | Error categories shared by every provider |
 | `internal/providers/akash` | The Akash provider: REST requests, response mapping, error classification |
 | `internal/providers/demo` | Built-in providers with fixed sample leases, for the offline demo |
 | `internal/providers/fake` | Deterministic in-memory providers for tests |
+| `internal/summary` | Pure calculations for the status dashboard: counts, "expiring soon" and exact spend totals per denom |
 
 Dependencies point one way, so Go's no-import-cycles rule is never hit:
 
     cmd/leasegrid → app → lease, providers (error categories)
-    cmd/leasegrid → output → lease
+    cmd/leasegrid → summary → lease
+    cmd/leasegrid → output → lease, summary
     cmd/leasegrid → config
     cmd/leasegrid → providers/akash → lease, providers
     cmd/leasegrid → providers/demo → lease
@@ -140,6 +144,57 @@ failure), 2 invalid usage, 130 interrupted.
 `show` has no `--format` flag yet; `list --format json --provider NAME` is the
 machine-readable path.
 
+## The `status` Command
+
+    flags ─► app.Service.ListLeases ─► summary.Calculate ─► output.WriteStatus ─► stdout
+
+`runStatus` only coordinates: it parses flags, lists leases, calculates the
+summary and renders it. The rules live in packages with no knowledge of flags
+or exit codes.
+
+1. **Flags are validated first**, as in `list`: `--format` accepts `table` or
+   `json` (no YAML), `--status` the three statuses, `--expiring-within` a
+   positive duration (default `168h`). `status` takes no positional arguments,
+   so `status demo-a` (a forgotten `--provider`) is a usage error instead of an
+   unfiltered dashboard.
+2. **Listing reuses `ListLeases`** with the `--provider` and `--status`
+   criteria and the default sort, so selection, contract checks, error labels
+   and cancellation match `list`. Every number on the dashboard describes the
+   leases shown. A failing provider fails the command with nothing on stdout:
+   a dashboard missing one provider's leases would show wrong totals.
+3. **`summary.Calculate(leases, now, window)`** is a pure function with the
+   clock passed in:
+   - counts per status and per provider;
+   - **expiring soon** (`summary.ExpiringSoon`): an active lease whose known
+     expiry is after now and before now plus the window. `--expiring-within`
+     sets the window only; unlike in `list`, it never filters;
+   - **spend per hour**: the sum of `Cost.PerHour` over active leases, one
+     `lease.Cost` per denom, sorted by denom. A lease without a denom has no
+     cost data and is skipped. Additions are checked:
+     `c > math.MaxInt64 - total` returns `summary.ErrCostOverflow` (exit 1)
+     instead of a wrapped-around number. Denoms are never converted.
+   - The result never holds a nil map or slice, so JSON shows `{}` and `[]`.
+4. **`output.WriteStatus`** renders one of two views:
+   - **Text:** four `Label:  value` lines (`Leases`, `Expiring soon`,
+     `Active spend` with full denoms, `By provider` sorted by name), a blank
+     line, then the `list` table. With no leases, `No leases found.` replaces
+     the table on stdout: the zero counts above it are data.
+   - **JSON:** one object built from a separate view struct, so `summary`
+     carries no JSON tags and the field names stay a stable contract:
+     `as_of`, `expiring_within` (Go duration syntax), the counts,
+     `by_provider`, `spend_per_hour` and `leases`.
+5. **Color** (`output.ColorMode`: `ColorAuto`, `ColorAlways`, `ColorNever`)
+   applies to the text view's STATUS and EXPIRES columns only. `ColorAuto`, the
+   zero value, colors only when the writer is an `*os.File` whose `Stat`
+   reports a character device and `NO_COLOR` is empty or unset; `--no-color`
+   selects `ColorNever`. Statuses are green (active), red
+   (insufficient_funds) and gray (closed); an active lease's expiry is red
+   once passed and yellow while expiring soon. `text/tabwriter` counts escape
+   codes as width, so every cell of a colored column, header included, is
+   wrapped in a code of the same length; removing the codes gives the plain
+   table byte for byte, which a test checks. JSON never has color. No
+   terminal library is needed.
+
 ## Provider Contract
 
 The interface is declared by its consumer, `internal/app`:
@@ -205,9 +260,9 @@ No credentials are involved, because lease data on Akash is public.
 - **Safety:** one deadline per call (30 s by default), every response body closed,
   responses capped at 8 MiB, no retries, HTTPS only. Every lease record is
   validated before any further request. Errors never include request URLs,
-  the owner address or response bodies. CLI tests check this for `list` and
-  `show` against failing local TLS servers whose responses carry a secret
-  marker, and for a request cancelled mid-flight.
+  the owner address or response bodies. CLI tests check this for `list`,
+  `show` and `status` against failing local TLS servers whose responses carry
+  a secret marker, and for a request cancelled mid-flight.
 - **Tests** run against sanitized fixtures in `testdata/`, served by a local
   `httptest` TLS server. No test touches the network unless you opt in to the
   live test in `live_test.go`.
@@ -256,11 +311,13 @@ providers:
   exiting. `main` alone turns errors into exit codes, so `run` is testable
   in-process.
 - **Deterministic output.** One injected clock reading per command, stable
-  sorting with explicit tie-breakers, and no map iteration in output paths.
-  Golden tests compare the table and the detail view byte for byte, and the
-  suite passes with `go test -count=20`.
-- **stdout is for data.** Diagnostics, including "No leases found.", go to
-  stderr, so piping JSON or YAML into another tool is safe.
+  sorting with explicit tie-breakers, and map keys always sorted before
+  output. Golden tests compare the table, the detail view and the status
+  dashboard byte for byte, and the suite passes with `go test -count=20`.
+- **stdout is for data.** Diagnostics go to stderr, so piping JSON or YAML
+  into another tool is safe. `list` prints "No leases found." on stderr;
+  `status` prints it on stdout as part of a dashboard that still shows its
+  zero counts.
 - **Cancellation everywhere.** Every provider call takes a `context.Context`.
   Ctrl+C cancels it, so a hung provider can't hang the CLI.
 - **Errors are returned, not hidden.** Output functions return write errors, so a
@@ -269,10 +326,15 @@ providers:
   wallet address, never a private key.
 - **Exact money.** Costs are integers in the token's smallest unit
   (1 AKT = 1,000,000 uakt), computed with exact `math/big` arithmetic, never
-  floating point. Costs in different denoms are never added or compared.
+  floating point. Totals add costs only within one denom, with overflow
+  checked; different denoms are never added, converted or compared.
+- **Color is optional and plain text comes first.** Color only on a terminal,
+  turned off by `--no-color` or `NO_COLOR`, and every status is still spelled
+  out, so the dashboard reads the same without it.
 - **Partial results (planned).** Providers are queried one after another, and
   the first failure stops the command. With a second real provider, one
-  failing provider should not hide the others' leases.
+  failing provider should not hide the others' leases; `status` will then
+  have to mark an incomplete dashboard.
 - **Strict configuration.** Unknown config fields are rejected, so typos are
   reported. Relaxing that later is non-breaking; tightening it would break
   existing files.
