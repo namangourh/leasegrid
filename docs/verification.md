@@ -300,6 +300,68 @@ directory. Each prediction was written down before the run.
 - **Code comments were reviewed:** every package has a package comment, there
   are no `TODO`s, and lint reports nothing, so no comments were changed.
 
+## Release verification at `c3a22a8`
+
+The final gate before a release decision, run on 2026-11-02 at commit
+`c3a22a8` with a clean working tree.
+
+- **Machine:** Windows 11 (`Microsoft Windows [Version 10.0.26200.7462]`),
+  `go version go1.26.3 windows/amd64`.
+- **CI:** run
+  [41456167985](https://github.com/namangourh/leasegrid/actions/runs/41456167985)
+  at the same commit passed every step.
+
+| Command | Exit | Result |
+|---|---|---|
+| `gofmt -l .` | 0 | no files listed |
+| `go mod tidy -diff` | 0 | no diff |
+| `go vet ./...` | 0 | no findings |
+| `go build ./...` | 0 | ok |
+| `go test ./... -count=1` | 0 | all 9 packages with tests `ok`; no failing package or test |
+| `go test ./... -count=1 -coverprofile=coverage.out` | 0 | per package: `cmd/leasegrid` 96.8%, `internal/output` 98.7%, `internal/providers/akash` 94.6%, the other six 100.0% |
+| `go tool cover -func=coverage.out` | 0 | **total: 97.3% of statements** |
+| `go test -race ./...` (locally) | 1 | can't run here: `runtime/cgo: ... cgo.exe: exit status 2` (no C compiler) |
+| `go test -race ./...` (CI, Ubuntu) | 0 | all 9 packages `ok` in run 41456167985 |
+
+The CLI checks were run with the binary built at `c3a22a8`. They gave the same
+results as the smoke runs in the release check above:
+
+| Command | Exit | stdout | stderr |
+|---|---|---|---|
+| `leasegrid --help` | 0 | empty | the usage text |
+| `leasegrid --version` | 0 | `leasegrid 0.1.0` | empty |
+| `leasegrid --config examples/demo.yaml list` | 0 | the 5-row table | empty |
+| `leasegrid --config examples/demo.yaml show 1002/1/1` | 0 | the 10-line detail view | empty |
+| `leasegrid --config examples/demo.yaml show missing-id` | 1 | **empty** | **`leasegrid: lease "missing-id" not found (searched: demo-a, demo-b)`** |
+
+No output contained an escape code, a wallet address, an endpoint or a
+provider response. LeaseGrid has no credentials to expose: Akash data is read
+publicly. Leaks on Akash failures are checked by the tests listed in the
+failure-contract section above.
+
+### Failure-contract checklist
+
+| Case | Expected | Actual | Evidence |
+|---|---|---|---|
+| Lease found | exit 0 | exit 0 | `show 1002/1/1` above; `TestShowAkash` |
+| Missing ID | actionable not-found, non-zero | exit 1, `not found (searched: ...)` on stderr | `show missing-id` above; `TestShowAkashNotFound`, `TestShowEmptyProvider` |
+| Malformed JSON | safe data error, non-zero | `ErrBadResponse`, exit 1, no body | `TestAkashFailureContract` row 3 |
+| HTTP 429 | rate-limited, retryable | `ErrRateLimited`, exit 1; documented as worth retrying later (no automatic retry) | row 2; `TestListLeasesHTTPStatus` |
+| Cancellation | preserved | `context.Canceled`, exit 130 | rows 4 and 5 |
+| Unknown state | (see note) | `ErrBadResponse`, exit 1, names the state | row 1 |
+| Missing denom | validation error | `ErrBadResponse`: `missing denom` | `TestToLeaseErrors/missing_denom` |
+| Owner with URL-special characters | encoded correctly | one intact `filters.owner` value | row 7; `TestListLeasesEscapesOwner` |
+
+**Deliberate deviation:** an unknown lease state is reported as a bad
+response, not normalized to an `unknown` status. Akash's lease-state enum has
+no other real state (its zero value, `invalid`, marks a broken record), so
+LeaseGrid refuses to show a lease it can't interpret.
+[akash-adapter.md](akash-adapter.md#lease-states) explains this.
+
+**Critical fixes needed:** none. Nothing failed to build, no test or race run
+failed, nothing leaked, and exit codes, stdout/stderr separation and the
+fixture-backed `list`/`show` all behaved as documented.
+
 ## Earlier features
 
 Their evidence is in the commit history and CI:

@@ -22,7 +22,7 @@ import (
 
 // version is a var, not a const, so release builds can override it with
 // go build -ldflags "-X main.version=v1.0.0".
-var version = "0.1.0"
+var version = "1.0.0"
 
 // usage is the top-level help text shown above the flag list.
 const usage = `LeaseGrid manages compute leases across DePIN providers.

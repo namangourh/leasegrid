@@ -12,7 +12,8 @@ leases, what they cost, or when they run out. LeaseGrid aims to be that single v
 
 ## Status
 
-Early development. What works today:
+Version 1.0.0, the first release (see the [changelog](CHANGELOG.md)). What it
+does:
 
 - `leasegrid list` reads real leases for any Akash wallet address from Akash's
   public API. No account, key or login is needed.
@@ -32,7 +33,7 @@ Requires Go 1.26 or newer.
 
 ```sh
 go install github.com/namangourh/leasegrid/cmd/leasegrid@latest
-leasegrid --version
+leasegrid --version   # leasegrid 1.0.0
 ```
 
 Or build from a clone:
@@ -169,6 +170,14 @@ leasegrid [--config PATH] status [flags]
 
 Global flags such as `--config` go before the command.
 
+| Command or flag | What it does | Reference |
+|---|---|---|
+| `list` | All leases as a table, JSON or YAML, filtered and sorted | [`list`](#list) |
+| `show <id>` | One lease in detail | [`show`](#show) |
+| `status` | Counts, leases expiring soon and spend per hour, then the leases | [`status`](#status) |
+| `--config PATH` | The config file to read (global) | [Configuration](#configuration) |
+| `--version`, `--help` | Print the version or the help (global); `<command> --help` shows a command's flags | |
+
 ### `list`
 
 | `list` flag | Values | Default |
@@ -261,29 +270,31 @@ How it behaves:
 | 2 | Invalid usage: an unknown flag, command, format, status or sort key, a `--provider` name that isn't configured, an invalid duration, a missing or extra lease ID, an ID that several providers have, or an argument after `status` |
 | 130 | Interrupted with Ctrl+C |
 
-### When something fails
+### Troubleshooting
 
 Errors go to stderr, prefixed with `leasegrid:`, and nothing is printed on
 stdout. A provider error names the provider and the request that failed. It
 never includes the endpoint, the wallet address, the request's query string or
 the provider's raw response.
 
+| You see | Exit | What to do |
+|---|---|---|
+| `leasegrid: no providers configured` | 1 | Create a config file (see [Configuration](#configuration)), or try the demo with `--config examples/demo.yaml` |
+| `flag provided but not defined: -config` | 2 | Put `--config PATH` before the command: `leasegrid --config PATH list` |
+| `leasegrid: read config ...` | 1 | The file given with `--config` doesn't exist or can't be read |
+| `leasegrid: unknown provider "..." (configured: ...)` | 2 | `--provider` must name an enabled provider from the config |
+| `leasegrid: lease "..." not found (searched: ...)` | 1 | Check the ID with `leasegrid list`; IDs look like `1002/1/1` |
+| `leasegrid: lease "..." is ambiguous (found in: ...)` | 2 | Several providers have that ID; add `--provider NAME` |
+| `leasegrid: provider akash: rate limited: ...` | 1 | Akash is limiting requests; try again later |
+| `leasegrid: provider akash: provider unavailable: ...` or `context deadline exceeded` | 1 | Akash is down, unreachable or slow; try again later |
+| `leasegrid: provider akash: bad response: ...` | 1 | Akash sent something LeaseGrid can't read, such as an unknown lease state; trying again won't help |
+| Codes such as `←[32m` instead of colors | | An old Windows console; use `--no-color` or set `NO_COLOR=1` |
+
+For example:
+
 ```text
 $ leasegrid --config examples/demo.yaml show missing-id
 leasegrid: lease "missing-id" not found (searched: demo-a, demo-b)
-
-$ leasegrid list --config examples/demo.yaml
-flag provided but not defined: -config
-```
-
-The second one is a usage error (exit status 2, followed by the command's
-help): `--config` is a global flag, so it goes before the command. Akash failures look like this, taken from the
-test suite:
-
-```text
-leasegrid: provider akash: rate limited: lease list returned HTTP 429
-leasegrid: provider akash: provider unavailable: lease list returned HTTP 500
-leasegrid: provider akash: bad response: lease 1001/1/1: unsupported state "pending"
 ```
 
 [docs/akash-adapter.md](docs/akash-adapter.md) lists every Akash failure, its
