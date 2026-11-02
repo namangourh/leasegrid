@@ -18,6 +18,7 @@ Early development. What works today:
   public API. No account, key or login is needed.
 - It filters by provider, status and time to expiry, sorts by several keys, and
   prints a table, JSON or YAML.
+- `leasegrid show <id>` prints one lease in detail.
 - Built-in demo providers let you try every feature offline.
 - A YAML configuration file, strictly parsed and validated.
 
@@ -72,6 +73,36 @@ leasegrid --config examples/demo.yaml list --provider demo-b --format yaml
 leasegrid --config examples/demo.yaml list --format json --sort-by provider
 ```
 
+To see one lease in detail, pass its ID to `show`:
+
+```sh
+leasegrid --config examples/demo.yaml show 1002/1/1
+```
+
+```text
+ID:         1002/1/1
+Provider:   demo-a
+Name:       api
+Status:     active
+Expires:    2026-11-12 03:43 UTC (in 10d0h)
+Cost/hour:  1800 uakt
+CPU:        1
+Memory:     1 GiB
+Storage:    5 GiB
+GPUs:       0
+```
+
+Lease IDs are unique only within one provider, and both demo providers have a
+lease `1001/1/1`. Asking for it is ambiguous, so `show` asks you to choose:
+
+```text
+$ leasegrid --config examples/demo.yaml show 1001/1/1
+leasegrid: lease "1001/1/1" is ambiguous (found in: demo-a, demo-b)
+leasegrid: choose one with --provider NAME
+```
+
+Add `--provider demo-b`, before or after the ID, to see the `worker` lease.
+
 ## List your Akash leases
 
 Create a config file with your Akash wallet address as `owner`:
@@ -103,9 +134,12 @@ estimate.
 
 ```text
 leasegrid [--config PATH] list [flags]
+leasegrid [--config PATH] show [--provider NAME] <id>
 ```
 
 Global flags such as `--config` go before the command.
+
+### `list`
 
 | `list` flag | Values | Default |
 |---|---|---|
@@ -133,13 +167,30 @@ How it behaves:
 - **Provider errors** never include the endpoint, the owner address or the
   provider's raw response.
 
-Exit codes:
+### `show`
+
+`show` prints every field of one lease. Unlike the table, it shows the cost's
+full denom and resources in readable units, and `-` for anything the provider
+didn't report.
+
+- **`--provider NAME`** searches only that provider. It may go before or after
+  the ID.
+- **An ID found under several providers** is an error that lists them; add
+  `--provider` to choose one. `show` never picks one for you.
+- **An ID that isn't found** prints `leasegrid: lease "<id>" not found
+  (searched: ...)` and exits with status 1.
+- **A provider that fails** fails the lookup, even if another provider has the
+  ID, because the failing one might have it too.
+- `show` prints text only. For machine-readable output, use
+  `list --format json --provider NAME`.
+
+### Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success, including an empty result |
-| 1 | Error, such as a missing or invalid config file, no providers configured, or a provider failure |
-| 2 | Invalid usage: an unknown flag, command, format, status or sort key, a `--provider` name that isn't configured, or an invalid duration |
+| 1 | Error, such as a missing or invalid config file, no providers configured, a provider failure, or a lease `show` can't find |
+| 2 | Invalid usage: an unknown flag, command, format, status or sort key, a `--provider` name that isn't configured, an invalid duration, a missing or extra lease ID, or an ID that several providers have |
 | 130 | Interrupted with Ctrl+C |
 
 ## Configuration
@@ -204,8 +255,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 4. ✅ Akash provider (tested against recorded API responses)
 5. ✅ `list` with table, JSON and YAML output, filters, sorting, demo providers,
    and Akash wired in through the config file
-6. Query several providers at once, with partial results when one fails
-7. `show` and `status` commands
+6. ✅ `show`: one lease in detail, with ambiguous IDs reported instead of
+   guessed
+7. Query several providers at once, with partial results when one fails
+8. `status` command
 
 See [DESIGN.md](DESIGN.md) for the technical design.
 

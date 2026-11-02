@@ -9,6 +9,7 @@ One CLI for viewing compute leases across DePIN providers, starting with Akash.
 - `leasegrid --help`, `leasegrid --version`
 - `leasegrid [--config PATH] list` with `--format table|json|yaml`, `--provider`,
   `--status`, `--expiring-within` and `--sort-by`
+- `leasegrid [--config PATH] show [--provider NAME] <id>`: one lease in detail
 - An Akash provider that reads real leases from Akash's public REST API,
   enabled from the config file with an owner wallet address
 - Built-in demo providers (`demo-a`, `demo-b`) for trying LeaseGrid offline
@@ -20,7 +21,7 @@ One CLI for viewing compute leases across DePIN providers, starting with Akash.
 ## Next Slice
 
 - Query providers concurrently, and show partial results when one fails
-- `show` and `status` commands
+- A `status` command
 
 ## Non-Goals for Now
 
@@ -37,10 +38,10 @@ One CLI for viewing compute leases across DePIN providers, starting with Akash.
 | Package | Responsibility |
 |---|---|
 | `cmd/leasegrid` | Entry point: parses arguments, picks the config file, builds providers from it, prints output, maps errors to exit codes |
-| `internal/app` | Use cases: declares the `Provider` interface, selects and calls providers, enforces their contract, merges, filters and sorts results, labels errors |
+| `internal/app` | Use cases: declares the `Provider` interface, selects and calls providers, enforces their contract, merges, filters and sorts results, finds one lease by ID, labels errors |
 | `internal/config` | Reads, strictly parses and validates the YAML config file; knows nothing about flags, specific providers or exit codes |
 | `internal/lease` | Lease model (cost, resources, expiry), validation and pure helpers: `Filter`, `Sort` and the flag parsers `ParseStatus` and `ParseSortKey` |
-| `internal/output` | Renders leases to any `io.Writer` through a `Formatter` interface: table, JSON and YAML |
+| `internal/output` | Renders leases to any `io.Writer`: table, JSON and YAML through a `Formatter` interface, and a one-lease detail view |
 | `internal/providers` | Error categories shared by every provider |
 | `internal/providers/akash` | The Akash provider: REST requests, response mapping, error classification |
 | `internal/providers/demo` | Built-in providers with fixed sample leases, for the offline demo |
@@ -104,6 +105,41 @@ Data flows one way:
 Exit codes: 0 success, 1 runtime error (config, no providers, provider
 failure), 2 invalid usage, 130 interrupted.
 
+## The `show` Command
+
+    id + --provider ─► app.Service.FindLease ─► ListLeases (one or all providers)
+                    ─► exact ID match ─► output.Detail ─► stdout
+
+1. **Arguments are checked first.** `show` needs exactly one non-empty lease
+   ID. Flags may go before or after it: `runShow` parses flags, takes the ID,
+   and parses the rest again. A wrong number of IDs, an empty ID or an unknown
+   flag is a usage error (exit 2) before the config is read.
+2. **The lookup reuses listing.** `FindLease` calls `ListLeases` with the
+   `--provider` selection, so provider selection, contract checks, error
+   labels and cancellation work exactly as in `list`, and the `Provider`
+   interface needs no new method. A lookup lists every searched provider in
+   full; `--provider` limits it to one.
+3. **Matching is exact**, and lease IDs are unique only within one provider:
+   - one match is printed;
+   - matches from several providers fail with `*app.AmbiguousLeaseError`,
+     which lists them. The CLI suggests `--provider` and exits 2; the service
+     never picks one;
+   - no match fails with `app.ErrLeaseNotFound`, naming the providers
+     searched, and exits 1;
+   - the same ID twice from one provider is a bad response from that
+     provider;
+   - a provider error fails the lookup even if another provider matched,
+     because the failing provider might have the ID too.
+4. **The detail view**, `output.Detail`, prints ten `Label:  value` lines in a
+   fixed order. Unlike the table, it keeps the full cost denom and shows
+   resources in readable units (`0.5` CPUs, `512 MiB`, `1.5 GiB`). A value the
+   provider didn't give is `-`, including all four resource lines when the
+   provider reported no resources. It uses the same injected clock and the
+   same control-character filter as the table.
+
+`show` has no `--format` flag yet; `list --format json --provider NAME` is the
+machine-readable path.
+
 ## Provider Contract
 
 The interface is declared by its consumer, `internal/app`:
@@ -134,7 +170,9 @@ A provider guarantees that:
 Implementations never import `internal/app`: Go interfaces are satisfied
 implicitly, and the compile-time checks live in their tests. Filtering and
 sorting happen in `internal/app`, so every provider gets the same semantics.
-Methods such as `GetLease` are added when a command needs them.
+`show` finds a lease through `ListLeases` too. A method such as `GetLease`
+would be added only when a provider can look up one lease much more cheaply
+than listing them all.
 
 ## Building Providers
 
@@ -167,8 +205,9 @@ No credentials are involved, because lease data on Akash is public.
 - **Safety:** one deadline per call (30 s by default), every response body closed,
   responses capped at 8 MiB, no retries, HTTPS only. Every lease record is
   validated before any further request. Errors never include request URLs,
-  the owner address or response bodies; a CLI test checks this against a
-  failing local TLS server.
+  the owner address or response bodies. CLI tests check this for `list` and
+  `show` against failing local TLS servers whose responses carry a secret
+  marker, and for a request cancelled mid-flight.
 - **Tests** run against sanitized fixtures in `testdata/`, served by a local
   `httptest` TLS server. No test touches the network unless you opt in to the
   live test in `live_test.go`.
@@ -218,8 +257,8 @@ providers:
   in-process.
 - **Deterministic output.** One injected clock reading per command, stable
   sorting with explicit tie-breakers, and no map iteration in output paths.
-  Golden tests compare the table byte for byte, and the suite passes with
-  `go test -count=20`.
+  Golden tests compare the table and the detail view byte for byte, and the
+  suite passes with `go test -count=20`.
 - **stdout is for data.** Diagnostics, including "No leases found.", go to
   stderr, so piping JSON or YAML into another tool is safe.
 - **Cancellation everywhere.** Every provider call takes a `context.Context`.
