@@ -362,6 +362,28 @@ LeaseGrid refuses to show a lease it can't interpret.
 failed, nothing leaked, and exit codes, stdout/stderr separation and the
 fixture-backed `list`/`show` all behaved as documented.
 
+## Release v1.0.0
+
+Released on 2026-11-02 as
+[v1.0.0](https://github.com/namangourh/leasegrid/releases/tag/v1.0.0), from
+source only (no prebuilt binaries).
+
+- **Release preparation:** `52417e4` set the version to `1.0.0` and added the
+  changelog, but CI run
+  [41457427535](https://github.com/namangourh/leasegrid/actions/runs/41457427535)
+  failed: the tests still expected `leasegrid 0.1.0`. Nothing was tagged.
+  `b8d496d` updated the tests, and CI run
+  [41464091950](https://github.com/namangourh/leasegrid/actions/runs/41464091950)
+  passed every step, including the race detector.
+- **Local checks at `b8d496d`:** `gofmt -l .` listed no files, all 9 packages
+  with tests `ok`, `go mod tidy -diff` no diff, and `leasegrid --version`
+  printed `leasegrid 1.0.0`.
+- **Tag:** `v1.0.0` is an annotated tag on `b8d496d`.
+- **Install check:** `go install github.com/namangourh/leasegrid/cmd/leasegrid@v1.0.0`
+  into an empty directory exited 0, the installed binary printed
+  `leasegrid 1.0.0`, and `go list -m` reported the module's origin as
+  `refs/tags/v1.0.0` at `b8d496d`.
+
 ## Earlier features
 
 Their evidence is in the commit history and CI:
