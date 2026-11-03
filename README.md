@@ -130,6 +130,14 @@ ID        PROVIDER  NAME    STATUS              EXPIRES                         
 In a terminal, statuses are colored, and so are the expiries of active leases
 that have passed or expire soon.
 
+### Screenshots
+
+LeaseGrid 1.0.0 in Windows Terminal, run against `examples/demo.yaml`:
+
+![leasegrid status with colored statuses and expiries, show with an unknown ID, and the help text](docs/images/v1.0.0-status-error-help.png)
+
+![leasegrid --version, list, show 1002/1/1, and list --provider demo-a --format json](docs/images/v1.0.0-list-show-json.png)
+
 ## List your Akash leases
 
 This part is optional: everything above works offline, and neither the test
